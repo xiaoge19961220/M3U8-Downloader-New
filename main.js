@@ -102,6 +102,17 @@ let proxy_agent = direct_agent;
 let globalConfigSaveVideoDir = '';
 
 const httpTimeout = { socket: 600000, request: 600000, response: 600000 };
+const DEFAULT_SEGMENT_RETRIES = 9;
+
+function normalizeSegmentRetryCount(value) {
+  if (value === undefined || value === null || value === '') return DEFAULT_SEGMENT_RETRIES;
+  const count = Number(value);
+  return Number.isInteger(count) && count >= 0 && count <= 30 ? count : DEFAULT_SEGMENT_RETRIES;
+}
+
+function getConfiguredSegmentRetryCount() {
+  return normalizeSegmentRetryCount(nconf.get('segment_retry_count'));
+}
 
 function normalizeTaskUrl(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -637,11 +648,12 @@ class QueueObject {
     this.dir = '';
     this.then = this.catch = null;
     this.retry = 0;
+    this.maxRetries = DEFAULT_SEGMENT_RETRIES;
   }
   async callback(_callback) {
     try {
       this.retry = this.retry + 1;
-      if (this.retry > 10) {
+      if (this.retry > this.maxRetries + 1) {
         this.catch && this.catch();
         return;
       }
@@ -683,7 +695,8 @@ class QueueObject {
       logger.debug(`2 ${segment.uri}`, `${filename}`);
 
       //检测文件是否存在
-      for (let index = 0; index < 3 && globalCond[this.id] && !fs.existsSync(filpath); index++) {
+      // One request per queue run keeps the configured retry count exact.
+      for (let index = 0; index < 1 && globalCond[this.id] && !fs.existsSync(filpath); index++) {
         // 下载的时候使用.dl后缀的文件名，下载完成后重命名
         let that = this;
 
@@ -929,6 +942,8 @@ async function startDownload(object, iidx) {
     mainWindow && mainWindow.webContents.send('task-notify-create', video);
   }
   let segments = parser.manifest.segments;
+  const maxRetries = getConfiguredSegmentRetryCount();
+  logger.info(`event=download_retry_policy task_id=${id} retries=${maxRetries}`);
   for (let iSeg = 0; iSeg < segments.length; iSeg++) {
     let qo = new QueueObject();
     qo.dir = dir;
@@ -939,6 +954,7 @@ async function startDownload(object, iidx) {
     qo.headers = headers;
     qo.myKeyIV = myKeyIV;
     qo.segment = segments[iSeg];
+    qo.maxRetries = maxRetries;
     qo.then = function () {
       if (!globalCond[id]) return;
       count_downloaded = count_downloaded + 1
@@ -950,15 +966,15 @@ async function startDownload(object, iidx) {
     };
     qo.catch = function () {
       if (!globalCond[id]) return;
-      if (this.retry < 10) {
+      if (this.retry <= this.maxRetries) {
         tsQueues.push(this);
       }
       else {
         globalCond[id] = false;
         video.success = false;
 
-        logger.error(`event=download_failed task_id=${id} segment=${JSON.stringify(this.segment.uri)} retries=${this.retry}`);
-        video.status = "多次尝试，下载片段失败";
+        logger.error(`event=download_failed task_id=${id} segment=${JSON.stringify(this.segment.uri)} attempts=${this.retry} retries=${this.maxRetries}`);
+        video.status = `下载片段失败（已尝试 ${this.retry} 次）`;
         mainWindow.webContents.send('task-notify-end', video);
 
         fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
@@ -1084,6 +1100,7 @@ async function startDownloadLive(object) {
   let taskName = object.taskName;
   let myKeyIV = object.myKeyIV;
   let url = normalizeTaskUrl(object.url);
+  const maxRetries = getConfiguredSegmentRetryCount();
   if (!taskName) {
     taskName = `${id}`;
   }
@@ -1177,7 +1194,7 @@ async function startDownloadLive(object) {
             const filpath_dl = filpath + '.dl';
             const uri_ts = new URL(segment.uri, url).href;
             pending.set(segment.uri, (async () => {
-              for (let attempt = 0; attempt < 3 && globalCond[id]; attempt++) {
+              for (let attempt = 0; attempt <= maxRetries && globalCond[id]; attempt++) {
                 try {
                   await downloadTaskFile(id, uri_ts, dir, {
                     filename: filename + '.dl', timeout: httpTimeout, headers: headers, agent: proxy_agent
@@ -1394,10 +1411,12 @@ ipcMain.on('get-config-dir', function (event, arg) {
   event.sender.send("get-config-dir-reply", {
     config_save_dir: globalConfigSaveVideoDir,
     config_ffmpeg: ffmpegPath,
-    config_proxy: nconf.get('config_proxy')
+    config_proxy: nconf.get('config_proxy'),
+    config_segment_retry_count: getConfiguredSegmentRetryCount()
   });
 })
 ipcMain.on('set-config', function (event, data) {
+  if (data.key == 'segment_retry_count') data.value = normalizeSegmentRetryCount(data.value);
   nconf.set(data.key, data.value);
   nconf.save();
 

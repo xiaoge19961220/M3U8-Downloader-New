@@ -27,6 +27,7 @@ test('live segments download concurrently and enter the merge stream in order', 
     configVideos: [],
     mainWindow: { webContents: { send() {} } },
     globalCond: {},
+    nconf: { get: () => 2 },
     activeMerges: new Map(),
     logger: { info() {}, error() {} },
     dateFormat: () => 'test',
@@ -66,7 +67,7 @@ test('live segments download concurrently and enter the merge stream in order', 
 
   try {
     vm.createContext(context);
-    const urlHelpersStart = source.indexOf('function normalizeTaskUrl(');
+    const urlHelpersStart = source.indexOf('const DEFAULT_SEGMENT_RETRIES');
     const urlHelpersEnd = source.indexOf('\nfunction transformConfig(', urlHelpersStart);
     vm.runInContext(`${source.slice(urlHelpersStart, urlHelpersEnd)}\n${source.slice(start, end)}\nthis.startDownloadLive = startDownloadLive;`, context);
     await context.startDownloadLive({ id: 1, url: 'https://example.test/live/index.m3u8', taskName: 'live' });

@@ -245,6 +245,19 @@ Referer: http://www.host.com" v-model="headers"></el-input>
                 </el-col>
               </el-row>
               <br>
+              <el-row :gutter="8">
+                <el-col :span="6" :offset="1">
+                  <span style="line-height: 40px;float: right;">单个片段失败重试次数</span>
+                </el-col>
+                <el-col :span="6">
+                  <el-input-number v-model="config_segment_retry_count" :min="0" :max="30" :step="1" :precision="0"
+                    @change="retryCountChange"></el-input-number>
+                </el-col>
+                <el-col :span="8">
+                  <span style="line-height: 40px;">0 表示不重试，最多 30 次</span>
+                </el-col>
+              </el-row>
+              <br>
               <el-divider><i class="el-icon-coffee"></i></el-divider>
               <el-row :gutter="8">
                 <el-col :span="4" :offset="7">

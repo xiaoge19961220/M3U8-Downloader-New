@@ -27,6 +27,7 @@ const _app = new Vue({
       config_save_dir: '',
       config_ffmpeg: '',
       config_proxy: '',
+      config_segment_retry_count: 9,
       headers: '',
       myKeyIV: '',
       myLocalKeyIV: '',
@@ -67,6 +68,9 @@ const _app = new Vue({
         that.config_save_dir = data.config_save_dir;
         that.config_ffmpeg = data.config_ffmpeg;
         data.config_proxy && (that.config_proxy = data.config_proxy);
+        if (data.config_segment_retry_count !== undefined) {
+          that.config_segment_retry_count = data.config_segment_retry_count;
+        }
       });
       ipcRenderer.on('open-select-m3u8-reply', function (event, data) {
         that.m3u8_url = data;
@@ -232,6 +236,10 @@ const _app = new Vue({
     },
     proxyChange: function () {
       ipcRenderer.send('set-config', { key: 'config_proxy', value: this.config_proxy });
+    },
+    retryCountChange: function (value) {
+      if (value === undefined || value === null) return;
+      ipcRenderer.send('set-config', { key: 'segment_retry_count', value: value });
     },
     m3u8UrlChange: function () {
       this.playlists = [];
