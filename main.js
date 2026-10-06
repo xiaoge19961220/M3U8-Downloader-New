@@ -24,6 +24,7 @@ const Aria2 = require('aria2');
 const forever = require('forever-monitor');
 const { HttpProxyAgent, HttpsProxyAgent } = require('hpagent');
 const url = require('url');
+const { inferTaskName } = require('./resource/js/task-name');
 
 contextMenu({ showCopyImage: false, showCopyImageAddress: false, showInspectElement: false, showServices: false });
 
@@ -490,6 +491,7 @@ ipcMain.on('task-add', async function (event, object) {
   logger.info('event=task_add source=single');
   let hlsSrc = normalizeTaskUrl(object.url);
   object.url = hlsSrc;
+  if (!object.taskName || !object.taskName.trim()) object.taskName = inferTaskName(hlsSrc);
   let _headers = {};
   if (object.headers) {
     let __ = object.headers.match(/(.*?): ?(.*?)(\n|\r|$)/g);
@@ -891,9 +893,7 @@ async function startDownload(object, iidx) {
   let myKeyIV = object.myKeyIV;
   let url_src = normalizeTaskUrl(object.url);
   let taskIsDelTs = object.taskIsDelTs;
-  if (!taskName) {
-    taskName = `${id}`;
-  }
+  if (!taskName || !taskName.trim()) taskName = inferTaskName(url_src) || `${id}`;
   let dir = path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download/' + taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""));
   if (globalConfigSaveVideoDir) {
     dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
@@ -1164,9 +1164,7 @@ async function startDownloadLive(object) {
   let myKeyIV = object.myKeyIV;
   let url = normalizeTaskUrl(object.url);
   const maxRetries = getConfiguredSegmentRetryCount();
-  if (!taskName) {
-    taskName = `${id}`;
-  }
+  if (!taskName || !taskName.trim()) taskName = inferTaskName(url) || `${id}`;
   let dir = path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download/' + taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""));
   if (globalConfigSaveVideoDir) {
     dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))

@@ -394,6 +394,7 @@ body, html { color: var(--ink); background: var(--page); }
 .task-empty p { margin: 7px 0 18px; color: var(--muted); font-size: 13px; }
 .el-dialog { max-width: 760px; border-radius: 12px; overflow: hidden; }
 .el-dialog__body { max-height: 65vh; overflow: auto; }
+.field-help { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .paycode .el-card__body { padding: 15px; text-align: center; }
 @media (max-width: 760px) {
   .download-page { padding: 16px; }
