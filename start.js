@@ -1,5 +1,16 @@
 const { ipcRenderer } = require('electron');
-const { shell } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const { pathToFileURL } = require('url');
+
+function donationImages(folder) {
+  const directory = path.join(__dirname, 'resource', folder);
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory)
+    .filter(name => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name) && fs.statSync(path.join(directory, name)).isFile())
+    .sort()
+    .map(name => pathToFileURL(path.join(directory, name)).href);
+}
 
 const _app = new Vue({
   el: '#app',
@@ -32,7 +43,9 @@ const _app = new Vue({
       downSpeed: '0 MB/s',
       playlists: [],
       playlistUri: '',
-      addTaskMessage: ''
+      addTaskMessage: '',
+      alipayImages: donationImages('alipay'),
+      wechatpayImages: donationImages('wechatpay')
     }
   },
   methods: {
@@ -124,14 +137,6 @@ const _app = new Vue({
       ipcRenderer.send('get-version');
       ipcRenderer.send('get-all-videos');
       ipcRenderer.send('get-config-dir');
-    },
-    clickAClick: function (e) {
-      e.preventDefault();
-      console.log(e.target.href);
-      shell.openExternal(e.target.href);
-    },
-    clickStartHookUrl: function (e) {
-      ipcRenderer.send('new-hook-url-window');
     },
     clickClose: function (e) {
       ipcRenderer.send('hide-windows');
@@ -308,30 +313,6 @@ const _app = new Vue({
         this.ts_dir = e.dataTransfer.files[0].path;
         ipcRenderer.send('open-select-ts-dir', e.dataTransfer.files[0].path);
       }
-    },
-    clickRefreshComment: function (e) {
-      var GUEST_INFO = ['nick', 'mail', 'link'];
-      var guest_info = 'nick'.split(',').filter(function (item) {
-        return GUEST_INFO.indexOf(item) > -1
-      });
-      console.log(guest_info)
-      var notify = 'false' == true;
-      var verify = 'false' == true;
-      new Valine({
-        el: '.vcomment',
-        notify: notify,
-        verify: verify,
-        visitor: true,
-        appId: "dYhmAWg45dtYACWfTUVR2msp-gzGzoHsz",
-        appKey: "SbuBYWY21MPOSVUCTHdVlXnx",
-        placeholder: "可以在这里进行咨询交流",
-        pageSize: '100',
-        avatar: 'mm',
-        lang: 'zh-cn',
-        meta: guest_info,
-        recordIP: true,
-        path: '/m3u8-downloader',
-      });
     }
   },
   mounted: function () {

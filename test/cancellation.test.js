@@ -51,12 +51,15 @@ test('delete action cancels the selected task before removing its record', () =>
     cancelTask: id => calls.push(`cancel ${id}`),
     fs: { writeFileSync: () => calls.push('save') },
     globalConfigVideoPath: 'unused',
-    logger: { error: error => { throw error; } }
+    logger: {
+      info: message => calls.push(message),
+      error: error => { throw error; }
+    }
   };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context);
   handlers.delvideo({ sender: { send: () => calls.push('reply') } }, 42);
-  assert.deepEqual(calls, ['cancel 42', 'save', 'reply']);
+  assert.deepEqual(calls, ['cancel 42', 'event=task_delete task_id=42', 'save', 'reply']);
   assert.equal(context.configVideos.length, 0);
 });
 

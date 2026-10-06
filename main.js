@@ -1,5 +1,5 @@
 const os = require('os')
-const { app, BrowserWindow, Tray, ipcMain, shell, Menu, dialog, nativeImage, session } = require('electron');
+const { app, BrowserWindow, Tray, ipcMain, shell, Menu, dialog, nativeImage } = require('electron');
 const isDev = require('electron-is-dev');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -24,7 +24,6 @@ const Aria2 = require('aria2');
 const forever = require('forever-monitor');
 const { HttpProxyAgent, HttpsProxyAgent } = require('hpagent');
 const url = require('url');
-const GA4 = require('./GA4');
 
 contextMenu({ showCopyImage: false, showCopyImageAddress: false, showInspectElement: false, showServices: false });
 
@@ -104,7 +103,6 @@ let globalConfigSaveVideoDir = '';
 
 const httpTimeout = { socket: 600000, request: 600000, response: 600000 };
 
-const referer = `https://tools.heisir.cn/M3U8Soft-Client?v=${package_self.version}`;
 
 function transformConfig(config) {
   const result = []
@@ -182,6 +180,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 logger.info(`\n\n----- ${appInfo.name} | v${appInfo.version} | ${os.platform()} -----\n\n`)
+logger.info(`event=app_open version=${appInfo.version} platform=${os.platform()}`);
 
 function createWindow() {
   // 创建浏览器窗口
@@ -215,12 +214,9 @@ function createWindow() {
     shell.openExternal(details.url);
     return { action: 'deny' };
   });
-  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    details.requestHeaders['referer'] = referer;
-    callback({ cancel: false, requestHeaders: details.requestHeaders });
-  });
 }
 function createPlayerWindow(src) {
+  logger.info('event=player_open');
   if (playerWindow == null) {
     // 创建浏览器窗口
     playerWindow = new BrowserWindow({
@@ -247,41 +243,6 @@ function createPlayerWindow(src) {
   }
   // 加载index.html文件
   playerWindow.loadFile(path.join(__dirname, 'player.html'), { search: "src=" + src });
-}
-
-// 9999.9999.9999 > 1.1.1 最高支持4位版本对比。  1.2.1 > 1.2.0   1.3 > 1.2.9999
-function version2float(v) {
-  let va = v.split('.');
-  if (va) {
-    let result = 0;
-    let base = 10000000.0;
-    va.forEach(vf => {
-      result = result + base * vf;
-      base = base / 10000.0;
-    });
-    return result;
-  }
-  return 0;
-}
-
-async function checkUpdate() {
-  //const { body } =await got("https://raw.githubusercontent.com/HeiSir2014/M3U8-Downloader/master/package.json").catch(logger.error);
-
-  try {
-    const { body } = await got("https://tools.heisir.cn/HLSDownload/package.json", {
-      timeout: { request: 10000 }, agent: proxy_agent
-    });
-    if (!body) return;
-    const remotePackage = JSON.parse(body);
-    if (typeof remotePackage.version !== 'string') return;
-    if (version2float(remotePackage.version) > version2float(package_self.version)) {
-      if (dialog.showMessageBoxSync(mainWindow, { type: 'question', buttons: ["Yes", "No"], message: `检测到新版本(${remotePackage.version})，是否要打开升级页面，下载最新版` }) == 0) {
-        shell.openExternal("https://tools.heisir.cn/HLSDownload/download.html");
-      }
-    }
-  } catch (error) {
-    logger.warn(`检查更新失败: ${error.message}`);
-  }
 }
 
 function loadConfigVideos() {
@@ -355,10 +316,6 @@ app.on('ready', () => {
     })
   } : direct_agent;
 
-  //百度统计代码
-  checkUpdate();
-  setInterval(checkUpdate, 600000);
-  GA4.sendEvent('open', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
   return;
 
   const EMPTY_STRING = '';
@@ -432,11 +389,9 @@ function downloadComplete(e) {
 }
 
 // 当全部窗口关闭时退出。
-app.on('window-all-closed', async () => {
+app.on('window-all-closed', () => {
 
-  console.log('window-all-closed')
-  let HMACCOUNT = nconf.get('HMACCOUNT');
-  HMACCOUNT && await got(`http://hm.baidu.com/hm.gif?cc=1&ck=1&cl=24-bit&ds=1920x1080&vl=977&et=0&ja=0&ln=zh-cn&lo=0&rnd=0&si=300991eff395036b1ba22ae155143ff3&v=1.2.74&lv=1&sn=0&r=0&ww=1920&ct=!!&tt=M3U8Soft-Client`, { headers: { "Referer": referer, "Cookie": "HMACCOUNT=" + HMACCOUNT } });
+  logger.info('event=app_close');
 
   // 在 macOS 上，除非用户用 Cmd + Q 确定地退出，
   // 否则绝大部分应用及其菜单栏会保持激活。
@@ -487,6 +442,7 @@ ipcMain.on('open-log-dir', function (event, arg) {
 });
 
 ipcMain.on('task-clear', async function (event, object) {
+  logger.info(`event=tasks_clear count=${configVideos.length}`);
   configVideos.forEach((video) => {
     cancelTask(video.id);
   })
@@ -495,7 +451,7 @@ ipcMain.on('task-clear', async function (event, object) {
 });
 
 ipcMain.on('task-add', async function (event, object) {
-  logger.info(JSON.stringify(object));
+  logger.info('event=task_add source=single');
   let hlsSrc = object.url;
   let _headers = {};
   if (object.headers) {
@@ -584,7 +540,7 @@ ipcMain.on('task-add', async function (event, object) {
 
 
 ipcMain.on('task-add-muti', async function (event, object) {
-  logger.info(object);
+  logger.info(`event=task_add source=batch count=${Array.isArray(object.m3u8_urls) ? object.m3u8_urls.length : 0}`);
   let m3u8_urls = object.m3u8_urls;
   let _headers = {};
   if (object.headers) {
@@ -889,9 +845,8 @@ async function startDownload(object, iidx) {
     dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
   }
 
-  logger.info(dir);
+  logger.info(`event=download_start task_id=${id} mode=vod output_dir=${JSON.stringify(dir)}`);
 
-  GA4.sendEvent('download', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
 
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -938,6 +893,7 @@ async function startDownload(object, iidx) {
   activeQueues.set(id, tsQueues);
 
   let count_seg = parser.manifest.segments.length;
+  logger.info(`event=playlist_parsed task_id=${id} segments=${count_seg}`);
   let count_downloaded = 0;
   var video = {
     id: id,
@@ -992,7 +948,7 @@ async function startDownload(object, iidx) {
         globalCond[id] = false;
         video.success = false;
 
-        logger.info(`URL:${video.url} | ${this.segment.uri} download failed`);
+        logger.error(`event=download_failed task_id=${id} segment=${JSON.stringify(this.segment.uri)} retries=${this.retry}`);
         video.status = "多次尝试，下载片段失败";
         mainWindow.webContents.send('task-notify-end', video);
 
@@ -1007,7 +963,7 @@ async function startDownload(object, iidx) {
       return;
     }
 
-    logger.info('download success');
+    logger.info(`event=segments_downloaded task_id=${id} segments=${count_downloaded}`);
     video.status = "已完成，合并中...";
     mainWindow.webContents.send('task-notify-end', video);
     let fileSegments = [];
@@ -1026,6 +982,7 @@ async function startDownload(object, iidx) {
     let outPathMP4 = path.join(dir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     let outPathMP4_ = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     if (fs.existsSync(ffmpegPath)) {
+      logger.info(`event=merge_start task_id=${id} source=download segments=${fileSegments.length}`);
       let ffmpegInputStream = createSegmentStream(fileSegments, (completed, total) => {
         let percent = Number.parseInt(completed * 100 / total);
         video.status = `合并中[${percent}%]`;
@@ -1040,6 +997,7 @@ async function startDownload(object, iidx) {
         .on('error', (error) => {
           activeMerges.delete(id);
           if (!globalCond[id]) return;
+          logger.error(`event=merge_failed task_id=${id} message=${JSON.stringify(error.message)}`);
           logger.error(error)
           video.videopath = "";
           video.status = "合并出错，请尝试手动合并";
@@ -1050,9 +1008,9 @@ async function startDownload(object, iidx) {
         .on('end', function () {
           activeMerges.delete(id);
           if (!globalCond[id]) return;
-          logger.info(`${outPathMP4} merge finished.`)
           video.videopath = "";
           fs.existsSync(outPathMP4) && (fs.renameSync(outPathMP4, outPathMP4_), video.videopath = outPathMP4_);
+          logger.info(`event=merge_complete task_id=${id} output=${JSON.stringify(video.videopath || outPathMP4)}`);
           video.status = "已完成"
           mainWindow.webContents.send('task-notify-end', video);
           if (video.taskIsDelTs) {
@@ -1124,7 +1082,7 @@ async function startDownloadLive(object) {
   if (globalConfigSaveVideoDir) {
     dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
   }
-  logger.info(dir);
+  logger.info(`event=download_start task_id=${id} mode=live output_dir=${JSON.stringify(dir)}`);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -1342,6 +1300,7 @@ ipcMain.on('delvideo', function (event, id) {
     if (Element.id == id) {
       try {
         cancelTask(Element.id);
+        logger.info(`event=task_delete task_id=${Element.id}`);
         if (false && fs.existsSync(Element.dir)) {
           var files = fs.readdirSync(Element.dir)
           files.forEach(e => {
@@ -1386,16 +1345,16 @@ ipcMain.on('playvideo', function (event, arg) {
   createPlayerWindow(arg);
 });
 ipcMain.on('StartOrStop', function (event, arg) {
-  logger.info(arg);
-
   let id = Number.parseInt(arg);
   if (globalCond[id] == null) {
     logger.info("不存在此任务")
     return;
   }
   if (globalCond[id]) {
+    logger.info(`event=download_stop task_id=${id}`);
     cancelTask(id);
   } else {
+    logger.info(`event=download_resume task_id=${id}`);
     globalCond[id] = true;
     configVideos.forEach(Element => {
       if (Element.id == id) {
@@ -1546,8 +1505,8 @@ ipcMain.on('open-select-ts-dir', function (event, arg) {
 
 ipcMain.on('start-merge-ts', async function (event, task) {
   if (!task) return;
-  GA4.sendEvent('video_merge', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
   let name = task.name ? task.name : (new Date().getTime() + '');
+  logger.info(`event=merge_start source=manual name=${JSON.stringify(name)} segments=${Array.isArray(task.ts_files) ? task.ts_files.length : 0}`);
 
   let dir = path.join(globalConfigSaveVideoDir, name);
   if (!fs.existsSync(dir)) {
@@ -1569,11 +1528,12 @@ ipcMain.on('start-merge-ts', async function (event, task) {
       .format('mp4')
       .save(outPathMP4)
       .on('error', (error) => {
+        logger.error(`event=merge_failed source=manual message=${JSON.stringify(error.message)}`);
         logger.error(error)
         mainWindow.webContents.send('start-merge-ts-status', { code: -2, progress: 100, status: '合并出错|' + error });
       })
       .on('end', function () {
-        logger.info(`${outPathMP4} merge finished.`)
+        logger.info(`event=merge_complete source=manual output=${JSON.stringify(outPathMP4)}`);
         mainWindow.webContents.send('start-merge-ts-status', { code: 1, progress: 100, status: 'success', dir: dir, path: outPathMP4 });
       })
       .on('progress', (info) => {
@@ -1584,9 +1544,4 @@ ipcMain.on('start-merge-ts', async function (event, task) {
   else {
     mainWindow.webContents.send('start-merge-ts-status', { code: -1, progress: 100, status: '未检测到FFMPEG,不进行合并操作。' });
   }
-});
-
-
-ipcMain.on("new-hook-url-window", function () {
-
 });

@@ -46,8 +46,6 @@ M3U8-Downloader是基于Electron框架开发的一款可以下载、播放HLS视
 
 ---
 
-# 官网
-[M3U8-Downloader 官网](https://tools.heisir.cn/HLSDownload)
 
 QQ交流群：341972319
 
@@ -63,7 +61,6 @@ QQ交流群：341972319
 # 下载可执行包
 
 ## [推荐] 蓝奏下载
-## [Windows 、Linux、MacOS 下载](https://tools.heisir.cn/HLSDownload/download.html)
 
 ## Github 下载
 ## [Releases下载](https://github.com/HeiSir2014/M3U8-Downloader/releases)
@@ -110,7 +107,3 @@ yarn pack-mac
 ```
 
 ### Enjoy it
-
-### 赞赏
-
-[赞赏链接](https://tools.heisir.cn/HLSDownload/2019/07/08/02/)

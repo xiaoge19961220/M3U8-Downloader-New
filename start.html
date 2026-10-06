@@ -8,24 +8,6 @@
   <link rel="stylesheet" href="resource/cdn/element.ui/theme-chalk/index.css">
   <link rel="stylesheet" href="resource/css/start.css">
 </head>
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-23VH4CNT3L"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag() { dataLayer.push(arguments); }
-  gtag('js', new Date());
-
-  gtag('config', 'G-23VH4CNT3L');
-</script>
-<script>
-  var _hmt = _hmt || [];
-  (function () {
-    var hm = document.createElement("script");
-    hm.src = "https://hm.baidu.com/hm.js?300991eff395036b1ba22ae155143ff3";
-    var s = document.getElementsByTagName("script")[0];
-    s.parentNode.insertBefore(hm, s);
-  })();
-</script>
 <body class="heisir">
   <div id="app">
     <template>
@@ -38,26 +20,6 @@
           </el-row>
 
           <div class="systemTool">
-            <el-dropdown trigger="click">
-              <span class="el-dropdown-link">关于</span>
-              <el-dropdown-menu slot="dropdown">
-                <el-dropdown-item icon="el-icon-link">
-                  <a class="mylink" href="https://tools.heisir.cn/HLSDownload/"
-                    v-on:click.stop.prevent="clickAClick">官网</a>
-                </el-dropdown-item>
-                <el-dropdown-item icon="el-icon-link">
-                  <a class="mylink" href="https://github.com/HeiSir2014/M3U8-Downloader"
-                    v-on:click.stop.prevent="clickAClick">开放源码</a>
-                </el-dropdown-item>
-                <el-dropdown-item icon="el-icon-connection">
-                  <a class="mylink" href="https://jq.qq.com/?_wv=1027&k=nhFrZBS0"
-                    v-on:click.stop.prevent="clickAClick">点击加群</a>
-                </el-dropdown-item>
-                <el-dropdown-item icon="el-icon-connection">
-                  <a class="mylink" href="#" v-on:click.stop.prevent="clickStartHookUrl">资源嗅探</a>
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </el-dropdown>
             <el-button class="button" icon="el-icon-setting" v-on:click="tabPane = 'setting'"></el-button>
             <el-button class="button" icon="el-icon-close" v-on:click="clickClose"></el-button>
           </div>
@@ -131,7 +93,7 @@
                     <el-tooltip effect="light" placement="top-start">
                       <div slot="content">如果M3U8文件是从网上直接下载下来的，TS流是在网络上的且M3U8文件里没有URL(http)前缀，就需要填写<br /><br />
                         如果TS视频流在M3U8文件目录下，则不需要填写这块<br /></div>
-                      <el-input type="text" placeholder="[可空] M3U8 URL前缀，例如：http://heisir.cn/cdn/123456/"
+                      <el-input type="text" placeholder="[可空] M3U8 URL前缀，例如：https://example.com/cdn/123456/"
                         v-model="m3u8_url_prefix"></el-input>
                     </el-tooltip>
                   </el-form-item>
@@ -251,20 +213,6 @@ Referer: http://www.host.com" v-model="headers"></el-input>
                 </el-col>
               </el-row>
             </el-tab-pane>
-            <el-tab-pane label="交流咨询">
-              <el-row :gutter="8">
-                <el-col :span="22">
-                  <el-alert title="警示：【天网恢恢疏而不漏】遵纪守法是每位公民应尽的义务，严禁在此发布违规违法内容，否则后果自负！违规内容举报QQ：1586462" type="warning"
-                    :center="true" :closable="false" show-icon>
-                  </el-alert>
-                </el-col>
-                <el-col :span="2">
-                  <el-button class="mybutton" type="success" @click="clickRefreshComment">刷新</el-button>
-                  </el-alert>
-                </el-col>
-              </el-row>
-              <section id="comments" class="vcomment"></section>
-            </el-tab-pane>
             <el-tab-pane label="设置" name="setting">
               <el-row :gutter="8">
                 <el-col :span="2" :offset="1">
@@ -301,7 +249,7 @@ Referer: http://www.host.com" v-model="headers"></el-input>
               <el-row :gutter="8">
                 <el-col :span="4" :offset="7">
                   <el-card class="paycode alipay" shadow="always">
-                    <img class="image" src="resource/alipay_code.png">
+                    <img v-for="image in alipayImages" :key="image" class="image" :src="image" alt="支付宝赞助二维码">
                     <div style="padding: 14px;">
                       <span>支付宝赞助</span>
                     </div>
@@ -309,7 +257,7 @@ Referer: http://www.host.com" v-model="headers"></el-input>
                 </el-col>
                 <el-col :span="4" :offset="2">
                   <el-card class="paycode wechat" shadow="always">
-                    <img class="image" src="resource/wechat_code.png">
+                    <img v-for="image in wechatpayImages" :key="image" class="image" :src="image" alt="微信赞助二维码">
                     <div style="padding: 14px;">
                       <span>微信赞助</span>
                     </div>
@@ -332,31 +280,6 @@ Referer: http://www.host.com" v-model="headers"></el-input>
   <script src="resource/cdn/element.ui/index.js"></script>
   <script src="start.js"></script>
 
-  <script src="resource/cdn/Valine/Valine.min.js"></script>
-
-  <script>
-    var GUEST_INFO = ['nick', 'mail', 'link'];
-    var guest_info = 'nick'.split(',').filter(function (item) {
-      return GUEST_INFO.indexOf(item) > -1
-    });
-    console.log(guest_info)
-    var notify = 'false' == true;
-    var verify = 'false' == true;
-    new Valine({
-      el: '.vcomment',
-      notify: notify,
-      verify: verify,
-      appId: "dYhmAWg45dtYACWfTUVR2msp-gzGzoHsz",
-      appKey: "SbuBYWY21MPOSVUCTHdVlXnx",
-      placeholder: "可以在这里进行咨询交流",
-      pageSize: '100',
-      avatar: 'mm',
-      lang: 'zh-cn',
-      meta: guest_info,
-      recordIP: true,
-      path: '/m3u8-downloader'
-    });
-  </script>
 </body>
 
 </html>

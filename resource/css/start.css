@@ -64,12 +64,6 @@ html,body,#app,#app section,#app section .main{
 }
 
 
-.systemTool .mylink{
-    color: #f3f3f3;
-    margin: 0 5px;
-    text-decoration: none;
-    font-size: 14px;
-}
 .systemTool .el-button{
     padding:0 !important;
     border:0 !important;
@@ -88,22 +82,6 @@ html,body,#app,#app section,#app section .main{
 
 .systemTool .el-button+.el-button{
     margin-left: 0 !important;
-}
-
-.el-dropdown-link {
-    cursor: pointer;
-    color: #fff;
-}
-.el-dropdown-menu{
-    -webkit-app-region: no-drag;
-    margin-top: -5px !important;
-}
-
-.el-dropdown-menu .mylink{
-    color: #009afb;
-    margin: 5px;
-    text-decoration: none;
-    font-size: 14px;
 }
 
 
@@ -346,11 +324,4 @@ html,body,#app,#app section,#app section .main{
 
 .heisir .el-divider__text{
     background-color: #00000000;
-}
-
-.heisir .vcomment{
-    overflow: auto !important;
-    padding-left: 50px !important;
-    padding-right: 10px !important;
-    height: calc(100% - 60px) !important;
 }

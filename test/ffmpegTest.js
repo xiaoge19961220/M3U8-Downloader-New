@@ -3,19 +3,10 @@ const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
 const { Readable} = require('stream');
 const path = require('path');
-const got = require('got');
 const { default: async } = require('async');
 const ffmpegPath = require('ffmpeg-static');
 
 
-(async ()=>{
-    
-    var respose = await got("https://tools.heisir.cn/HLSDownload/ChromeVideoPlugin.crx",{responseType:"buffer"});
-    console.log(respose.headers['content-length'])
-    console.log(respose.body.length)
-    console.log(respose.error);
-});
-    
 console.log(ffmpegPath)
 /*
 

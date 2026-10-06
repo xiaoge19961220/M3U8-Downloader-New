@@ -103,7 +103,7 @@ instance.on('start', function (process, data) {
     });
     aria2.on("onDownloadComplete", DownloadComplete);
     
-    aria2.call("addUri", ['https://tools.heisir.cn/HLSDownload/ChromeVideoPlugin.crx'], { dir: app.getPath('downloads'), out: "123.crx", split: "64" });
+    aria2.call("addUri", ['https://example.com/'], { dir: app.getPath('downloads'), out: "example.html", split: "64" });
 })
 
 instance.on('stop', function (process) {
@@ -112,7 +112,7 @@ instance.on('stop', function (process) {
 
 setInterval(() => {
 
-    aria2.call("addUri", ['https://tools.heisir.cn/HLSDownload/ChromeVideoPlugin.crx'], { dir: app.getPath('downloads'), out: "123.crx", split: "64" })
+    aria2.call("addUri", ['https://example.com/'], { dir: app.getPath('downloads'), out: "example.html", split: "64" })
 
 
 }, 5000);
