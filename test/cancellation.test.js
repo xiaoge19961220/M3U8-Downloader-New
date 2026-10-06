@@ -41,26 +41,99 @@ test('deleting a task cancels requests, queued work, and merging', async () => {
 });
 
 test('delete action cancels the selected task before removing its record', () => {
-  const start = source.indexOf("ipcMain.on('delvideo'");
+  const start = source.indexOf('function removeTaskDownloads(');
   const end = source.indexOf('\nfunction showDirInExploer(', start);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm3u8-delete-test-'));
+  const dir = path.join(root, 'download-42');
+  const output = path.join(root, 'download-42.mp4');
+  const unrelated = path.join(root, 'keep.txt');
+  const history = path.join(root, 'videos.json');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, '000001.ts'), 'segment');
+  fs.writeFileSync(output, 'video');
+  fs.writeFileSync(unrelated, 'keep');
   const calls = [];
   const handlers = {};
   const context = {
     ipcMain: { on: (name, handler) => { handlers[name] = handler; } },
-    configVideos: [{ id: 42, dir: 'unused' }],
+    configVideos: [{ id: 42, dir, taskName: 'download-42' }],
     cancelTask: id => calls.push(`cancel ${id}`),
-    fs: { writeFileSync: () => calls.push('save') },
-    globalConfigVideoPath: 'unused',
+    fs, path,
+    globalConfigVideoPath: history,
     logger: {
       info: message => calls.push(message),
       error: error => { throw error; }
     }
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(start, end), context);
-  handlers.delvideo({ sender: { send: () => calls.push('reply') } }, 42);
-  assert.deepEqual(calls, ['cancel 42', 'event=task_delete task_id=42', 'save', 'reply']);
-  assert.equal(context.configVideos.length, 0);
+  try {
+    vm.createContext(context);
+    vm.runInContext(source.slice(start, end), context);
+    handlers.delvideo({ sender: { send: () => calls.push('reply') } }, 42);
+    assert.deepEqual(calls, ['cancel 42', 'event=task_delete task_id=42 files=deleted', 'reply']);
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(fs.existsSync(output), false);
+    assert.equal(fs.readFileSync(unrelated, 'utf8'), 'keep');
+    assert.equal(fs.readFileSync(history, 'utf8'), '[]');
+    assert.equal(context.configVideos.length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('clearing tasks removes every task directory and completed video', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm3u8-clear-test-'));
+  const videos = [1, 2].map(id => ({ id, taskName: `task-${id}`, dir: path.join(root, `task-${id}`) }));
+  for (const video of videos) {
+    fs.mkdirSync(video.dir);
+    fs.writeFileSync(path.join(video.dir, '000001.ts'), 'segment');
+    fs.writeFileSync(path.join(root, `${video.taskName}.mp4`), 'video');
+  }
+  const handlers = {};
+  const replies = [];
+  const context = {
+    fs, path,
+    ipcMain: { on: (name, handler) => { handlers[name] = handler; } },
+    configVideos: videos,
+    cancelTask() {},
+    globalConfigVideoPath: path.join(root, 'videos.json'),
+    logger: { info() {}, error: error => { throw error; } }
+  };
+  try {
+    vm.createContext(context);
+    const helperStart = source.indexOf('function removeTaskDownloads(');
+    const helperEnd = source.indexOf("\nipcMain.on('delvideo'", helperStart);
+    const clearStart = source.indexOf("ipcMain.on('task-clear'");
+    const clearEnd = source.indexOf("\nipcMain.on('task-add'", clearStart);
+    vm.runInContext(`${source.slice(helperStart, helperEnd)}\n${source.slice(clearStart, clearEnd)}`, context);
+    handlers['task-clear']({ sender: { send: (_, remaining) => replies.push(Array.from(remaining)) } });
+
+    assert.deepEqual(replies, [[]]);
+    assert.equal(fs.readFileSync(context.globalConfigVideoPath, 'utf8'), '[]');
+    for (const video of videos) {
+      assert.equal(fs.existsSync(video.dir), false);
+      assert.equal(fs.existsSync(path.join(root, `${video.taskName}.mp4`)), false);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deleting one of two tasks with a shared directory keeps the files and record', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm3u8-shared-test-'));
+  const dir = path.join(root, 'shared');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, '000001.ts'), 'segment');
+  try {
+    const context = { fs, path };
+    vm.createContext(context);
+    const start = source.indexOf('function removeTaskDownloads(');
+    const end = source.indexOf("\nipcMain.on('delvideo'", start);
+    vm.runInContext(`${source.slice(start, end)}\nthis.removeTaskDownloads = removeTaskDownloads;`, context);
+    assert.throws(() => context.removeTaskDownloads({ id: 1, taskName: 'shared', dir }, [{ id: 2, dir }]));
+    assert.equal(fs.readFileSync(path.join(dir, '000001.ts'), 'utf8'), 'segment');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('segment cleanup preserves unrelated files and removes an empty task directory', () => {

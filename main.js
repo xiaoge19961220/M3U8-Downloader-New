@@ -454,8 +454,18 @@ ipcMain.on('task-clear', async function (event, object) {
   configVideos.forEach((video) => {
     cancelTask(video.id);
   })
-  configVideos = [];
+  const failed = [];
+  for (const video of configVideos) {
+    try {
+      removeTaskDownloads(video, []);
+    } catch (error) {
+      logger.error(`event=task_delete_failed task_id=${video.id} error=${error.message}`);
+      failed.push(video);
+    }
+  }
+  configVideos = failed;
   fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
+  event.sender.send('task-clear-reply', configVideos);
 });
 
 ipcMain.on('task-add', async function (event, object) {
@@ -549,7 +559,6 @@ ipcMain.on('task-add', async function (event, object) {
 
 
 ipcMain.on('task-add-muti', async function (event, object) {
-  logger.info(`event=task_add source=batch count=${Array.isArray(object.m3u8_urls) ? object.m3u8_urls.length : 0}`);
   let m3u8_urls = object.m3u8_urls;
   let _headers = {};
   if (object.headers) {
@@ -611,6 +620,7 @@ ipcMain.on('task-add-muti', async function (event, object) {
       }
     }
   })
+  logger.info(`event=task_add source=batch count=${iidx}`);
   info = `批量添加成功，正在下载...`;
   event.sender.send('task-add-reply', { code: 0, message: info });
 });
@@ -1294,21 +1304,29 @@ function formatTime(duration) {
 }
 
 
+function removeTaskDownloads(video, otherVideos) {
+  const name = String(video.taskName || video.id).replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, '');
+  if (!video.dir || !name) throw new Error('Task directory is missing');
+  const dir = path.resolve(video.dir);
+  if (path.basename(dir) !== name) throw new Error('Task directory does not match task name');
+  if (otherVideos.some(other => other.dir && path.resolve(other.dir) === dir)) {
+    throw new Error('Task directory is shared with another task');
+  }
+  if (fs.existsSync(dir)) {
+    if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('Task directory is a symbolic link');
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  const output = path.join(path.dirname(dir), `${name}.mp4`);
+  if (fs.existsSync(output)) fs.rmSync(output, { force: true, maxRetries: 5, retryDelay: 100 });
+}
+
 ipcMain.on('delvideo', function (event, id) {
   configVideos.forEach(Element => {
     if (Element.id == id) {
       try {
         cancelTask(Element.id);
-        logger.info(`event=task_delete task_id=${Element.id}`);
-        if (false && fs.existsSync(Element.dir)) {
-          var files = fs.readdirSync(Element.dir)
-          files.forEach(e => {
-            //fs.unlinkSync(path.join(Element.dir,e));
-            shell.moveItemToTrash(path.join(Element.dir, e))
-          })
-          //fs.rmdirSync(Element.dir,{recursive :true})
-          shell.moveItemToTrash(Element.dir)
-        }
+        removeTaskDownloads(Element, configVideos.filter(video => video.id != Element.id));
+        logger.info(`event=task_delete task_id=${Element.id} files=deleted`);
         var nIdx = configVideos.indexOf(Element);
         if (nIdx > -1) {
           configVideos.splice(nIdx, 1);

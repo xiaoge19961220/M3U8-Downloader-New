@@ -133,6 +133,9 @@ const _app = new Vue({
           }
         }
       });
+      ipcRenderer.on('task-clear-reply', function (event, remainingVideos) {
+        that.allVideos = remainingVideos;
+      });
 
       ipcRenderer.send('get-version');
       ipcRenderer.send('get-all-videos');
@@ -177,7 +180,6 @@ const _app = new Vue({
     },
     clickClearTask: function (e) {
       ipcRenderer.send('task-clear');
-      this.allVideos = [];
     },
     clickNewTaskMuti: function (e) {
       if (!this.config_save_dir) {

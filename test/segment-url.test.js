@@ -22,10 +22,11 @@ test('segment URLs resolve after whitespace is removed from the playlist address
 test('batch task creation trims a pasted playlist URL before downloading', async () => {
   const handlers = {};
   const downloads = [];
+  const logs = [];
   const batchContext = {
     normalizeTaskUrl: context.urls.normalizeTaskUrl,
     ipcMain: { on: (name, handler) => { handlers[name] = handler; } },
-    logger: { info() {} },
+    logger: { info: message => logs.push(message) },
     startDownload: object => { downloads.push(object.url); }
   };
   vm.createContext(batchContext);
@@ -39,4 +40,5 @@ test('batch task creation trims a pasted playlist URL before downloading', async
     taskIsDelTs: true
   });
   assert.deepEqual(downloads, ['https://example.com/hls/index.m3u8']);
+  assert.ok(logs.includes('event=task_add source=batch count=1'));
 });
