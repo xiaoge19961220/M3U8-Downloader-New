@@ -212,9 +212,6 @@ const _app = new Vue({
     clickItemOptData: function (e) {
       let that = e.target;
       var opt = that.getAttribute('opt');
-      if (opt == "StartOrStop") {
-        that.value = that.value == "停止" ? "重新开始" : "停止";
-      }
       ipcRenderer.send(that.getAttribute('opt'), that.getAttribute('data'));
     },
     getPlaylistLabel: function (playlist) {

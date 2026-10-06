@@ -43,6 +43,7 @@ let globalCond = {};
 const activeRequests = new Map();
 const activeMerges = new Map();
 const activeQueues = new Map();
+const activeRuns = new Map();
 
 function trackTaskRequest(id, request) {
   if (!activeRequests.has(id)) activeRequests.set(id, new Set());
@@ -64,6 +65,7 @@ function downloadTaskFile(id, uri, dir, options) {
 
 function cancelTask(id) {
   globalCond[id] = false;
+  activeRuns.delete(id);
   const queue = activeQueues.get(id);
   if (queue) {
     queue.kill();
@@ -312,6 +314,11 @@ app.on('ready', () => {
   ]);
   tray.setContextMenu(contextMenu);
   configVideos = loadConfigVideos();
+  for (const video of configVideos) {
+    globalCond[video.id] = false;
+    if (video.completed == null) video.completed = Boolean(video.status === '已完成' && video.videopath && fs.existsSync(video.videopath));
+    video.paused = !video.completed;
+  }
 
   globalConfigSaveVideoDir = nconf.get('SaveVideoDir');
 
@@ -649,6 +656,7 @@ class QueueObject {
     this.then = this.catch = null;
     this.retry = 0;
     this.maxRetries = DEFAULT_SEGMENT_RETRIES;
+    this.isActive = () => Boolean(globalCond[this.id]);
   }
   async callback(_callback) {
     try {
@@ -657,7 +665,7 @@ class QueueObject {
         this.catch && this.catch();
         return;
       }
-      if (!globalCond[this.id]) {
+      if (!this.isActive()) {
         logger.debug(`globalCond[this.id] is not exsited.`);
         return;
       }
@@ -696,7 +704,7 @@ class QueueObject {
 
       //检测文件是否存在
       // One request per queue run keeps the configured retry count exact.
-      for (let index = 0; index < 1 && globalCond[this.id] && !fs.existsSync(filpath); index++) {
+      for (let index = 0; index < 1 && this.isActive() && !fs.existsSync(filpath); index++) {
         // 下载的时候使用.dl后缀的文件名，下载完成后重命名
         let that = this;
 
@@ -714,11 +722,14 @@ class QueueObject {
           //aria2Client && aria2Client.call("addUri", [uri_ts], { dir:that.dir, out: filename + ".dl", split: "16", header: _headers});
           //break;
           await downloadTaskFile(this.id, uri_ts, that.dir, { filename: filename + ".dl", timeout: httpTimeout, headers: that.headers, agent: proxy_agent }).catch((err) => {
-            if (globalCond[this.id]) logger.error(err)
-            if (fs.existsSync(filpath_dl)) fs.unlinkSync(filpath_dl);
+            if (this.isActive()) {
+              logger.error(err);
+              if (fs.existsSync(filpath_dl)) fs.unlinkSync(filpath_dl);
+            }
           });
         }
-        if (!globalCond[this.id]) {
+        if (!this.isActive()) {
+          if (activeRuns.has(this.id)) return;
           if (fs.existsSync(filpath_dl)) fs.unlinkSync(filpath_dl);
           return;
         }
@@ -766,9 +777,9 @@ class QueueObject {
 
             if (/^http/.test(key_uri)) {
               await downloadTaskFile(this.id, key_uri, that.dir, { filename: "aes.key", headers: that.headers, timeout: httpTimeout, agent: proxy_agent }).catch((error) => {
-                if (globalCond[this.id]) logger.error(error);
+                if (this.isActive()) logger.error(error);
               });
-              if (!globalCond[this.id]) return;
+              if (!this.isActive()) return;
             }
             else if (/^file:\/\/\//.test(key_uri)) {
               key_uri = key_uri.replace('file:///', '')
@@ -828,7 +839,7 @@ class QueueObject {
           break;
         }
       }
-      if (!globalCond[this.id]) return;
+      if (!this.isActive()) return;
       if (fs.existsSync(filpath)) {
         this.then && this.then();
       }
@@ -838,7 +849,7 @@ class QueueObject {
     }
     catch (e) {
       logger.error(e);
-      if (globalCond[this.id]) this.catch && this.catch();
+      if (this.isActive()) this.catch && this.catch();
     }
     finally {
       _callback();
@@ -850,9 +861,30 @@ function queue_callback(that, callback) {
   that.callback(callback);
 }
 
+function scanDownloadedSegments(dir, count) {
+  const missing = [];
+  let downloaded = 0;
+  for (let index = 0; index < count; index++) {
+    const file = path.join(dir, `${(index + 1 + '').padStart(6, '0')}.ts`);
+    if (fs.existsSync(file)) {
+      if (fs.statSync(file).size > 0) {
+        downloaded++;
+        continue;
+      }
+      fs.unlinkSync(file);
+    }
+    missing.push(index);
+  }
+  return { downloaded, missing };
+}
+
 async function startDownload(object, iidx) {
+  const resuming = Boolean(object.id);
   let id = !object.id ? (iidx != null ? (new Date().getTime() + iidx) : new Date().getTime()) : object.id;
   globalCond[id] = true;
+  const run = Symbol('vod-download');
+  activeRuns.set(id, run);
+  const isActive = () => globalCond[id] && activeRuns.get(id) === run;
   let headers = object.headers;
   let url_prefix = object.url_prefix;
   let taskName = object.taskName;
@@ -866,6 +898,7 @@ async function startDownload(object, iidx) {
   if (globalConfigSaveVideoDir) {
     dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
   }
+  if (resuming && object.dir) dir = object.dir;
 
   logger.info(`event=download_start task_id=${id} mode=vod output_dir=${JSON.stringify(dir)}`);
 
@@ -886,9 +919,9 @@ async function startDownload(object, iidx) {
           rejectUnauthorized: false
         }
       })).catch(error => {
-        if (globalCond[id]) logger.error(error);
+        if (isActive()) logger.error(error);
       });
-      if (!globalCond[id]) return;
+      if (!isActive()) return;
       {
         if (response && response.body != null
           && response.body != '') {
@@ -917,7 +950,7 @@ async function startDownload(object, iidx) {
   let count_seg = parser.manifest.segments.length;
   logger.info(`event=playlist_parsed task_id=${id} segments=${count_seg}`);
   let count_downloaded = 0;
-  var video = {
+  var video = resuming ? object : {
     id: id,
     url: url_src,
     url_prefix: url_prefix,
@@ -932,10 +965,19 @@ async function startDownload(object, iidx) {
     myKeyIV: myKeyIV,
     taskIsDelTs: taskIsDelTs,
     success: true,
-    videopath: ''
+    videopath: '',
+    paused: false,
+    completed: false
   };
-
-  configVideos.splice(0, 0, video);
+  video.url = url_src;
+  video.dir = dir;
+  video.segment_total = count_seg;
+  video.segment_downloaded = 0;
+  video.success = true;
+  video.paused = false;
+  video.completed = false;
+  video.status = '正在检查已下载片段...';
+  if (!resuming) configVideos.splice(0, 0, video);
   fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
 
   if (!object.id) {
@@ -944,11 +986,20 @@ async function startDownload(object, iidx) {
   let segments = parser.manifest.segments;
   const maxRetries = getConfiguredSegmentRetryCount();
   logger.info(`event=download_retry_policy task_id=${id} retries=${maxRetries}`);
-  for (let iSeg = 0; iSeg < segments.length; iSeg++) {
+  const scan = scanDownloadedSegments(dir, segments.length);
+  count_downloaded = scan.downloaded;
+  const missingSegments = scan.missing;
+  video.segment_downloaded = count_downloaded;
+  video.status = `下载中...${count_downloaded}/${count_seg}`;
+  fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
+  mainWindow && mainWindow.webContents.send('task-notify-update', video);
+  logger.info(`event=download_resume_scan task_id=${id} reused=${count_downloaded} remaining=${missingSegments.length}`);
+  for (const iSeg of missingSegments) {
     let qo = new QueueObject();
     qo.dir = dir;
     qo.idx = iSeg;
     qo.id = id;
+    qo.isActive = isActive;
     qo.url = url_src;
     qo.url_prefix = url_prefix;
     qo.headers = headers;
@@ -956,7 +1007,7 @@ async function startDownload(object, iidx) {
     qo.segment = segments[iSeg];
     qo.maxRetries = maxRetries;
     qo.then = function () {
-      if (!globalCond[id]) return;
+      if (!isActive()) return;
       count_downloaded = count_downloaded + 1
       video.segment_downloaded = count_downloaded;
       video.status = `下载中...${count_downloaded}/${count_seg}`
@@ -965,13 +1016,15 @@ async function startDownload(object, iidx) {
       }
     };
     qo.catch = function () {
-      if (!globalCond[id]) return;
+      if (!isActive()) return;
       if (this.retry <= this.maxRetries) {
         tsQueues.push(this);
       }
       else {
         globalCond[id] = false;
+        activeRuns.delete(id);
         video.success = false;
+        video.paused = true;
 
         logger.error(`event=download_failed task_id=${id} segment=${JSON.stringify(this.segment.uri)} attempts=${this.retry} retries=${this.maxRetries}`);
         video.status = `下载片段失败（已尝试 ${this.retry} 次）`;
@@ -982,11 +1035,11 @@ async function startDownload(object, iidx) {
     }
     tsQueues.push(qo);
   }
-  tsQueues.drain(async () => {
-    activeQueues.delete(id);
-    if (!globalCond[id] || !video.success || !configVideos.includes(video)) {
+  const finishDownload = async () => {
+    if (!isActive() || !video.success || !configVideos.includes(video)) {
       return;
     }
+    activeQueues.delete(id);
 
     logger.info(`event=segments_downloaded task_id=${id} segments=${count_downloaded}`);
     video.status = "已完成，合并中...";
@@ -1007,6 +1060,7 @@ async function startDownload(object, iidx) {
     let outPathMP4 = path.join(dir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     let outPathMP4_ = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     if (fs.existsSync(ffmpegPath)) {
+      if (fs.existsSync(outPathMP4)) fs.unlinkSync(outPathMP4);
       logger.info(`event=merge_start task_id=${id} source=download segments=${fileSegments.length}`);
       let ffmpegInputStream = createSegmentStream(fileSegments, (completed, total) => {
         let percent = Number.parseInt(completed * 100 / total);
@@ -1021,10 +1075,13 @@ async function startDownload(object, iidx) {
         .save(outPathMP4)
         .on('error', (error) => {
           activeMerges.delete(id);
-          if (!globalCond[id]) return;
+          if (!isActive()) return;
           logger.error(`event=merge_failed task_id=${id} message=${JSON.stringify(error.message)}`);
           logger.error(error)
           video.videopath = "";
+          video.paused = true;
+          globalCond[id] = false;
+          activeRuns.delete(id);
           video.status = "合并出错，请尝试手动合并";
           mainWindow.webContents.send('task-notify-end', video);
 
@@ -1032,10 +1089,14 @@ async function startDownload(object, iidx) {
         })
         .on('end', function () {
           activeMerges.delete(id);
-          if (!globalCond[id]) return;
+          if (!isActive()) return;
           video.videopath = "";
           fs.existsSync(outPathMP4) && (fs.renameSync(outPathMP4, outPathMP4_), video.videopath = outPathMP4_);
           logger.info(`event=merge_complete task_id=${id} output=${JSON.stringify(video.videopath || outPathMP4)}`);
+          video.completed = true;
+          video.paused = false;
+          globalCond[id] = false;
+          activeRuns.delete(id);
           video.status = "已完成"
           mainWindow.webContents.send('task-notify-end', video);
           if (video.taskIsDelTs) {
@@ -1058,7 +1119,9 @@ async function startDownload(object, iidx) {
       video.status = "已完成，未发现本地FFMPEG，不进行合成。"
       mainWindow.webContents.send('task-notify-end', video);
     }
-  });
+  };
+  tsQueues.drain(finishDownload);
+  if (missingSegments.length === 0) void finishDownload();
 }
 
 function sleep(ms) {
@@ -1094,7 +1157,7 @@ function cleanupDownloadedSegments(dir, fileSegments) {
 }
 
 async function startDownloadLive(object) {
-
+  const resuming = Boolean(object.id);
   let id = !object.id ? new Date().getTime() : object.id;
   let headers = object.headers;
   let taskName = object.taskName;
@@ -1108,6 +1171,7 @@ async function startDownloadLive(object) {
   if (globalConfigSaveVideoDir) {
     dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
   }
+  if (resuming && object.dir) dir = object.dir;
   logger.info(`event=download_start task_id=${id} mode=live output_dir=${JSON.stringify(dir)}`);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -1115,7 +1179,7 @@ async function startDownloadLive(object) {
 
   let count_downloaded = 0;
   let count_seg = 100;
-  var video = {
+  var video = resuming ? object : {
     id: id,
     url: url,
     dir: dir,
@@ -1127,10 +1191,14 @@ async function startDownloadLive(object) {
     myKeyIV: myKeyIV,
     taskName: taskName,
     headers: headers,
-    videopath: ''
+    videopath: '',
+    paused: false,
+    completed: false
   };
 
-  configVideos.splice(0, 0, video);
+  video.paused = false;
+  video.completed = false;
+  if (!resuming) configVideos.splice(0, 0, video);
   fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
 
   if (!object.id) {
@@ -1380,27 +1448,23 @@ ipcMain.on('playvideo', function (event, arg) {
 });
 ipcMain.on('StartOrStop', function (event, arg) {
   let id = Number.parseInt(arg);
-  if (globalCond[id] == null) {
-    logger.info("不存在此任务")
-    return;
-  }
+  const video = configVideos.find(item => item.id == id);
+  if (!video || video.completed) return;
   if (globalCond[id]) {
     logger.info(`event=download_stop task_id=${id}`);
     cancelTask(id);
+    video.paused = true;
+    video.status = '已暂停';
   } else {
     logger.info(`event=download_resume task_id=${id}`);
+    video.paused = false;
+    video.status = '正在恢复...';
     globalCond[id] = true;
-    configVideos.forEach(Element => {
-      if (Element.id == id) {
-        if (Element.isLiving == true) {
-          startDownloadLive(Element);
-        }
-        else {
-          startDownload(Element);
-        }
-      }
-    });
+    if (video.isLiving) startDownloadLive(video);
+    else startDownload(video);
   }
+  fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
+  mainWindow && mainWindow.webContents.send('task-notify-update', video);
 });
 
 ipcMain.on('setting_isdelts', function (event, arg) {

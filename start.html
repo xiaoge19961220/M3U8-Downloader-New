@@ -58,7 +58,7 @@
                       <input class="del" opt="delvideo" :data="o.id" type="button" value="删除" @click="clickItemOptData">
                       <input class="play" opt="playvideo" :data="o.videopath" type="button" value="播放"
                         @click="clickItemOptData">
-                      <input class="StartStop" opt="StartOrStop" :data="o.id" type="button" value="停止"
+                      <input class="StartStop" opt="StartOrStop" :data="o.id" type="button" :value="o.completed ? '已完成' : (o.paused ? '继续' : '暂停')" :disabled="o.completed"
                         @click="clickItemOptData">
                     </div>
                   </div>
