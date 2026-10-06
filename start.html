@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8">
@@ -20,63 +20,53 @@
           </el-row>
 
           <div class="systemTool">
-            <el-button class="button" icon="el-icon-setting" title="设置" aria-label="设置" v-on:click="tabPane = 'setting'"></el-button>
-            <el-button class="button" icon="el-icon-close" title="隐藏窗口" aria-label="隐藏窗口" v-on:click="clickClose"></el-button>
+            <el-button class="button" icon="el-icon-setting" v-on:click="tabPane = 'setting'"></el-button>
+            <el-button class="button" icon="el-icon-close" v-on:click="clickClose"></el-button>
           </div>
         </el-header>
         <el-main class="main">
           <el-tabs type="border-card" v-model="tabPane">
-            <el-tab-pane label="下载任务">
-              <div class="download-page">
-                <div class="task-toolbar">
-                  <div class="toolbar-heading">
-                    <h1>下载任务</h1>
-                    <p>管理 M3U8 下载，暂停后可继续已完成的片段</p>
+            <el-tab-pane label="M3U8视频下载">
+              <el-row :gutter="8">
+                <el-col :span="3" :offset="1">
+                  <el-button class="mybutton" type="primary" icon="el-icon-news" @click="clickNewTask">新建下载</el-button>
+                </el-col>
+                <el-col :span="4" :offset="1">
+                  <el-button class="mybutton" type="danger" icon="el-icon-news" @click="clickClearTask">清空下载任务(
+                    {{allVideos.length}} )</el-button>
+                </el-col>
+                <el-col v-show="false" :span="4" :offset="11">
+                  <div class="speed el-icon-download">{{downSpeed}}</div>
+                </el-col>
+              </el-row>
+              <ul class="list TaskList" style="overflow:auto">
+                <li v-for="o in allVideos" :key="o.id" class="item">
+                  <div class="m3u8"></div>
+                  <div class="link"><input type="text" :value="o.url" readonly></div>
+
+                  <div class="name"><span>名称：</span><span class="value">{{o.taskName}}</span></div>
+                  <div class="time"><span>时间：</span><span class="value">{{o.time}}</span></div>
+                  <div class="status">
+                    <span>状态：</span><span class="value">{{o.status}}</span>
                   </div>
-                  <div class="toolbar-actions">
-                    <el-button type="primary" icon="el-icon-plus" @click="clickNewTask">新建下载</el-button>
-                    <el-button icon="el-icon-delete" :disabled="!allVideos.length" @click="clickClearTask">清空任务</el-button>
+                  <div class="opt">
+                    <div class="top">
+                      <input class="opendir" opt="opendir" :data="o.dir" type="button" value="打开文件夹"
+                        @click="clickItemOptData">
+                    </div>
+                    <div class="bottom">
+                      <input class="del" opt="delvideo" :data="o.id" type="button" value="删除" @click="clickItemOptData">
+                      <input class="play" opt="playvideo" :data="o.videopath" type="button" value="播放"
+                        @click="clickItemOptData">
+                      <input class="StartStop" opt="StartOrStop" :data="o.id" type="button" :value="o.completed ? '已完成' : (o.paused ? '继续' : '暂停')" :disabled="o.completed"
+                        @click="clickItemOptData">
+                    </div>
                   </div>
-                </div>
-                <div class="task-overview" aria-label="任务概览">
-                  <span><strong>{{allVideos.length}}</strong> 全部任务</span>
-                  <span><i class="overview-dot running"></i><strong>{{runningTaskCount}}</strong> 下载中</span>
-                  <span><i class="overview-dot paused"></i><strong>{{pausedTaskCount}}</strong> 已暂停</span>
-                  <span><i class="overview-dot finished"></i><strong>{{completedTaskCount}}</strong> 已完成</span>
-                  <span v-if="failedTaskCount"><i class="overview-dot failed"></i><strong>{{failedTaskCount}}</strong> 失败</span>
-                </div>
-                <ul class="TaskList" v-if="allVideos.length">
-                  <li v-for="o in allVideos" :key="o.id" class="task-card">
-                    <div class="task-card-main">
-                      <div class="task-icon"><i class="el-icon-video-play"></i></div>
-                      <div class="task-content">
-                        <div class="task-heading">
-                          <strong class="task-name" :title="taskTitle(o)">{{taskTitle(o)}}</strong>
-                          <span class="task-badge" :class="taskState(o)">{{taskStateLabel(o)}}</span>
-                        </div>
-                        <div class="task-url" :title="o.url">{{o.url}}</div>
-                        <div class="task-progress-line">
-                          <div class="task-progress"><span :style="{width: taskProgress(o) + '%'}" :class="taskState(o)"></span></div>
-                          <span class="task-percentage">{{taskProgress(o)}}%</span>
-                        </div>
-                        <div class="task-meta"><span>{{o.status || '等待中'}}</span><span>{{o.segment_downloaded || 0}} / {{o.segment_total || 0}} 片段</span><span>{{o.time}}</span></div>
-                      </div>
-                    </div>
-                    <div class="task-actions">
-                      <button class="task-action primary" opt="StartOrStop" :data="o.id" :disabled="o.completed" @click="clickItemOptData">{{o.completed ? '已完成' : (o.paused ? '继续下载' : '暂停下载')}}</button>
-                      <button class="task-action" opt="opendir" :data="o.dir" @click="clickItemOptData">打开目录</button>
-                      <button class="task-action" opt="playvideo" :data="o.videopath" :disabled="!o.videopath" @click="clickItemOptData">播放</button>
-                      <button class="task-action danger" opt="delvideo" :data="o.id" @click="clickItemOptData">删除</button>
-                    </div>
-                  </li>
-                </ul>
-                <div v-else class="task-empty">
-                  <div class="empty-icon"><i class="el-icon-download"></i></div>
-                  <h2>还没有下载任务</h2>
-                  <p>添加 M3U8 链接或本地播放列表，开始下载视频。</p>
-                  <el-button type="primary" icon="el-icon-plus" @click="clickNewTask">新建下载</el-button>
-                </div>
-              </div>
+                </li>
+                <el-alert v-if="!allVideos.length" style="margin-top: 10px; height: 100px; line-height: 1;"
+                  title="您还没有添加下载任务，在浏览器里嗅探到M3U8(HLS协议)视频流后，可以在这里缓存下载，快来试试吧。" type="success" effect="light"
+                  :closable="false" :center="true" show-icon></el-alert>
+              </ul>
               <el-dialog title="新建下载任务" :visible.sync="dlg_newtask_visible" width="60%" :modal="true"
                 :close-on-click-modal="false" :close-on-press-escape="false" :center="false">
                 <el-form label-width="80px">
@@ -97,7 +87,7 @@
                     </el-select>
                   </el-form-item>
                   <el-form-item label="任务名" label-position="right">
-                    <el-input type="text" placeholder="可选；未填写时使用时间戳" v-model="taskName"></el-input>
+                    <el-input type="text" placeholder="[可空] 默认当前时间戳" v-model="taskName"></el-input>
                   </el-form-item>
                   <el-form-item label="URL前缀" label-position="right" v-if="m3u8_url.startsWith('file:///')">
                     <el-tooltip effect="light" placement="top-start">

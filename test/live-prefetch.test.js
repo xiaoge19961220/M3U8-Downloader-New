@@ -8,7 +8,7 @@ const test = require('node:test');
 
 test('live segments download concurrently and enter the merge stream in order', async () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const start = source.indexOf('async function startDownloadLive(');
+  const start = source.indexOf('async function startDownloadLive(object)');
   const end = source.indexOf('\nfunction formatTime(', start);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'm3u8-live-test-'));
   const ffmpegPath = path.join(directory, 'ffmpeg.exe');
@@ -27,7 +27,6 @@ test('live segments download concurrently and enter the merge stream in order', 
     configVideos: [],
     mainWindow: { webContents: { send() {} } },
     globalCond: {},
-    taskFileName: name => name,
     nconf: { get: () => 2 },
     activeMerges: new Map(),
     logger: { info() {}, error() {} },

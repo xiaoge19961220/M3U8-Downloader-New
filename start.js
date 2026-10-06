@@ -49,32 +49,7 @@ const _app = new Vue({
       wechatpayImages: donationImages('wechatpay')
     }
   },
-  computed: {
-    runningTaskCount: function () { return this.allVideos.filter(video => !video.completed && !video.paused && video.success !== false).length; },
-    pausedTaskCount: function () { return this.allVideos.filter(video => !video.completed && video.paused && video.success !== false).length; },
-    completedTaskCount: function () { return this.allVideos.filter(video => video.completed).length; },
-    failedTaskCount: function () { return this.allVideos.filter(video => !video.completed && video.success === false).length; }
-  },
   methods: {
-    taskTitle: function (video) {
-      return video.taskName || `任务 ${video.id}`;
-    },
-    taskState: function (video) {
-      if (video.completed) return 'finished';
-      if (!video.success) return 'failed';
-      return video.paused ? 'paused' : 'running';
-    },
-    taskStateLabel: function (video) {
-      const labels = { finished: '已完成', failed: '下载失败', paused: '已暂停', running: '下载中' };
-      return labels[this.taskState(video)];
-    },
-    taskProgress: function (video) {
-      if (video.completed) return 100;
-      const total = Number(video.segment_total);
-      const downloaded = Number(video.segment_downloaded);
-      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(downloaded)) return 0;
-      return Math.max(0, Math.min(100, Math.round(downloaded * 100 / total)));
-    },
     installEvent: function (e) {
       let that = this;
       ipcRenderer.on('get-version-reply', function (event, data) {
@@ -99,7 +74,6 @@ const _app = new Vue({
       });
       ipcRenderer.on('open-select-m3u8-reply', function (event, data) {
         that.m3u8_url = data;
-        that.m3u8UrlChange();
       });
       ipcRenderer.on('open-select-ts-dir-reply', function (event, data) {
         that.ts_dir = data;
@@ -155,9 +129,6 @@ const _app = new Vue({
       });
 
       ipcRenderer.on('delvideo-reply', function (event, data) {
-        if (data.filesDeleted === false) {
-          that.$message({ type: 'info', message: '任务已删除；下载目录与其他任务共用，文件已保留', duration: 3500 });
-        }
         for (let idx = 0; idx < that.allVideos.length; idx++) {
           let e = that.allVideos[idx];
           if (e.id == data.id) {
@@ -325,7 +296,6 @@ const _app = new Vue({
       }
       let p = e.dataTransfer.files[0].path;
       this.m3u8_url = `file:///${p}`;
-      this.m3u8UrlChange();
     },
     dropTSFiles: function (e) {
       e.preventDefault();
