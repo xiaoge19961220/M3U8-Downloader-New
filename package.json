@@ -1,32 +1,33 @@
 {
   "name": "m3u8-downloader",
   "productName": "M3U8-Downloader",
-  "version": "2.0.8",
+  "version": "3.0.0",
   "description": "M3U8-Downloader，用于下载主流网站的视频和直播。",
   "main": "main.js",
   "dependencies": {
-    "aria2": "^4.1.0",
-    "async": "^3.2.0",
-    "crypto-js": "^4.0.0",
+    "aria2": "^4.1.2",
+    "async": "^3.2.6",
+    "crypto-js": "^4.2.0",
     "dateformat": "^3.0.3",
     "download": "^8.0.0",
-    "electron-context-menu": "^2.4.0",
+    "electron-context-menu": "^2.5.2",
     "electron-is-dev": "^1.2.0",
-    "ffmpeg-static": "^4.2.5",
-    "fluent-ffmpeg": "^2.1.2",
-    "forever-monitor": "^3.0.1",
-    "got": "^11.5.0",
-    "hpagent": "^0.1.1",
+    "ffmpeg-static": "^5.3.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "forever-monitor": "^3.0.3",
+    "got": "^11.8.6",
+    "hpagent": "^0.1.2",
     "http": "0.0.0",
     "https": "^1.0.0",
     "m3u8-parser": "^7.2.0",
     "nconf": "^0.10.0",
-    "queue": "^6.0.1",
-    "url": "^0.11.0",
-    "winston": "^3.17.0"
+    "node-fetch": "^3.3.2",
+    "queue": "^6.0.2",
+    "url": "^0.11.4",
+    "winston": "^3.19.0"
   },
   "devDependencies": {
-    "electron": "^16.0.7",
+    "electron": "^16.2.8",
     "electron-builder": "^25.1.8"
   },
   "scripts": {
@@ -42,7 +43,7 @@
   "build": {
     "appId": "cn.heisir.m3u8-downloader",
     "artifactName": "${productName}-${os}_${arch}-${version}.${ext}",
-    "electronVersion": "16.0.7",
+    "electronVersion": "16.2.8",
     "copyright": "Copyright © 2022 ${author}",
     "compression": "normal",
     "directories": {
@@ -54,12 +55,10 @@
       "!.github/*",
       "!test/*",
       "!README.md",
-      "!node_modules/ffmpeg-static/ffmpeg.exe",
-      "!node_modules/ffmpeg-static/ffmpeg",
-      "!node_modules/ffmpeg-static/ffmpeg.ffmpeg",
       "!resource/aria2/*"
     ],
     "asar": true,
+    "asarUnpack": "node_modules/ffmpeg-static/ffmpeg*",
     "win": {
       "target": [
         {
@@ -74,7 +73,6 @@
         }
       ],
       "extraResources": [
-        "node_modules/ffmpeg-static/ffmpeg.exe",
         "resource/aria2/win32/aria2.conf",
         "resource/aria2/win32/aria2c.exe"
       ],
@@ -113,7 +111,6 @@
         }
       ],
       "extraResources": [
-        "node_modules/ffmpeg-static/ffmpeg",
         "resource/aria2/darwin/aria2.conf",
         "resource/aria2/darwin/aria2c"
       ],
@@ -137,7 +134,6 @@
     },
     "linux": {
       "extraResources": [
-        "node_modules/ffmpeg-static/ffmpeg",
         "resource/aria2/linux/aria2.conf",
         "resource/aria2/linux/aria2c"
       ],

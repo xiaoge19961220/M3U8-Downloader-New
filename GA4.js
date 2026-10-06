@@ -1,4 +1,3 @@
-const fetch = require("node-fetch");
 const os = require("os");
 const package_self = require('./package.json');
 const { app } = require("electron");
@@ -49,6 +48,7 @@ const GA4 = {
     const url = `https://www.google-analytics.com/mp/collect?measurement_id=${MEASUREMENT_ID}&api_secret=${API_SECRET}`;
 
     try {
+      const { default: fetch } = await import("node-fetch");
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -2,6 +2,8 @@ const os = require('os')
 const { app, BrowserWindow, Tray, ipcMain, shell, Menu, dialog, nativeImage, session } = require('electron');
 const isDev = require('electron-is-dev');
 const { spawn } = require('child_process');
+const http = require('http');
+const https = require('https');
 const path = require('path');
 const { Parser } = require('m3u8-parser');
 const fs = require('fs');
@@ -27,7 +29,7 @@ const GA4 = require('./GA4');
 contextMenu({ showCopyImage: false, showCopyImageAddress: false, showInspectElement: false, showServices: false });
 
 if (!isDev) {
-  ffmpegPath = ffmpegPath.replace('app.asar/', '').replace('app.asar\\', '');
+  ffmpegPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', path.basename(ffmpegPath));
 }
 
 let isdelts = true;
@@ -39,6 +41,51 @@ let firstHide = true;
 
 var configVideos = [];
 let globalCond = {};
+const activeRequests = new Map();
+const activeMerges = new Map();
+const activeQueues = new Map();
+
+function trackTaskRequest(id, request) {
+  if (!activeRequests.has(id)) activeRequests.set(id, new Set());
+  activeRequests.get(id).add(request);
+  const release = () => {
+    const requests = activeRequests.get(id);
+    if (requests) {
+      requests.delete(request);
+      if (requests.size === 0) activeRequests.delete(id);
+    }
+  };
+  Promise.resolve(request).then(release, release);
+  return request;
+}
+
+function downloadTaskFile(id, uri, dir, options) {
+  return trackTaskRequest(id, download(uri, dir, options));
+}
+
+function cancelTask(id) {
+  globalCond[id] = false;
+  const queue = activeQueues.get(id);
+  if (queue) {
+    queue.kill();
+    activeQueues.delete(id);
+  }
+  for (const request of activeRequests.get(id) || []) {
+    if (typeof request.cancel === 'function') request.cancel();
+    else if (typeof request.destroy === 'function') request.destroy();
+  }
+  activeRequests.delete(id);
+  const merge = activeMerges.get(id);
+  if (merge) {
+    merge.input.destroy();
+    try {
+      merge.command.kill('SIGKILL');
+    } catch (error) {
+      logger.debug(`合并进程已结束: ${error.message}`);
+    }
+    activeMerges.delete(id);
+  }
+}
 const globalConfigDir = app.getPath('userData');
 const globalConfigPath = path.join(globalConfigDir, 'config.json');
 const globalConfigVideoPath = path.join(globalConfigDir, 'config_videos.json');
@@ -47,7 +94,11 @@ const aria2_app = path.join(aria2Dir, "aria2c.exe");
 const aria2_config = path.join(aria2Dir, "aria2.conf");
 let aria2Client = null;
 let aria2Server = null;
-let proxy_agent = null;
+const direct_agent = {
+  http: new http.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 16 }),
+  https: new https.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 16 })
+};
+let proxy_agent = direct_agent;
 
 let globalConfigSaveVideoDir = '';
 
@@ -216,23 +267,32 @@ function version2float(v) {
 async function checkUpdate() {
   //const { body } =await got("https://raw.githubusercontent.com/HeiSir2014/M3U8-Downloader/master/package.json").catch(logger.error);
 
-  const { body } = await got("https://tools.heisir.cn/HLSDownload/package.json", {
-    https: {
-      rejectUnauthorized: false
-    }
-  }).catch(logger.error);
-  if (body != '') {
-    try {
-      let _package = JSON.parse(body);
-      if (version2float(_package.version) > version2float(package_self.version)) {
-        if (dialog.showMessageBoxSync(mainWindow, { type: 'question', buttons: ["Yes", "No"], message: `检测到新版本(${_package.version})，是否要打开升级页面，下载最新版` }) == 0) {
-          shell.openExternal("https://tools.heisir.cn/HLSDownload/download.html");
-          return;
-        }
+  try {
+    const { body } = await got("https://tools.heisir.cn/HLSDownload/package.json", {
+      timeout: { request: 10000 }, agent: proxy_agent
+    });
+    if (!body) return;
+    const remotePackage = JSON.parse(body);
+    if (typeof remotePackage.version !== 'string') return;
+    if (version2float(remotePackage.version) > version2float(package_self.version)) {
+      if (dialog.showMessageBoxSync(mainWindow, { type: 'question', buttons: ["Yes", "No"], message: `检测到新版本(${remotePackage.version})，是否要打开升级页面，下载最新版` }) == 0) {
+        shell.openExternal("https://tools.heisir.cn/HLSDownload/download.html");
       }
-    } catch (error) {
-      logger.error(error);
     }
+  } catch (error) {
+    logger.warn(`检查更新失败: ${error.message}`);
+  }
+}
+
+function loadConfigVideos() {
+  if (!fs.existsSync(globalConfigVideoPath)) return [];
+  try {
+    const videos = JSON.parse(fs.readFileSync(globalConfigVideoPath, 'utf8'));
+    if (Array.isArray(videos)) return videos;
+    throw new Error('config_videos.json must contain an array');
+  } catch (error) {
+    logger.error(`读取下载记录失败: ${error.message}`);
+    return [];
   }
 }
 app.on('ready', () => {
@@ -242,10 +302,6 @@ app.on('ready', () => {
   tray = new Tray(iconImg.resize({ width: 20, height: 20 }));
   tray.setTitle(AppTitle);
   tray.setToolTip(AppTitle);
-  tray.on("double-click", () => {
-    mainWindow.show();
-  });
-
   tray.on("double-click", () => {
     mainWindow.show();
   });
@@ -275,11 +331,7 @@ app.on('ready', () => {
     }
   ]);
   tray.setContextMenu(contextMenu);
-  try {
-    configVideos = JSON.parse(fs.readFileSync(globalConfigVideoPath));
-  } catch (error) {
-    logger.error(error);
-  }
+  configVideos = loadConfigVideos();
 
   globalConfigSaveVideoDir = nconf.get('SaveVideoDir');
 
@@ -301,17 +353,11 @@ app.on('ready', () => {
       scheduling: 'lifo',
       proxy: config_proxy
     })
-  } : null;
+  } : direct_agent;
 
   //百度统计代码
-  (async () => {
-    try {
-      checkUpdate();
-      setInterval(checkUpdate, 600000);
-    } catch (error) {
-      logger.error(error)
-    }
-  })();
+  checkUpdate();
+  setInterval(checkUpdate, 600000);
   GA4.sendEvent('open', { time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss") });
   return;
 
@@ -442,7 +488,7 @@ ipcMain.on('open-log-dir', function (event, arg) {
 
 ipcMain.on('task-clear', async function (event, object) {
   configVideos.forEach((video) => {
-    globalCond[video.id] = false;
+    cancelTask(video.id);
   })
   configVideos = [];
   fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
@@ -673,7 +719,7 @@ class QueueObject {
       logger.debug(`2 ${segment.uri}`, `${filename}`);
 
       //检测文件是否存在
-      for (let index = 0; index < 3 && !fs.existsSync(filpath); index++) {
+      for (let index = 0; index < 3 && globalCond[this.id] && !fs.existsSync(filpath); index++) {
         // 下载的时候使用.dl后缀的文件名，下载完成后重命名
         let that = this;
 
@@ -690,10 +736,14 @@ class QueueObject {
           }
           //aria2Client && aria2Client.call("addUri", [uri_ts], { dir:that.dir, out: filename + ".dl", split: "16", header: _headers});
           //break;
-          await download(uri_ts, that.dir, { filename: filename + ".dl", timeout: httpTimeout, headers: that.headers, agent: proxy_agent }).catch((err) => {
-            logger.error(err)
+          await downloadTaskFile(this.id, uri_ts, that.dir, { filename: filename + ".dl", timeout: httpTimeout, headers: that.headers, agent: proxy_agent }).catch((err) => {
+            if (globalCond[this.id]) logger.error(err)
             if (fs.existsSync(filpath_dl)) fs.unlinkSync(filpath_dl);
           });
+        }
+        if (!globalCond[this.id]) {
+          if (fs.existsSync(filpath_dl)) fs.unlinkSync(filpath_dl);
+          return;
         }
         if (!fs.existsSync(filpath_dl)) continue;
         if (fs.statSync(filpath_dl).size <= 0) {
@@ -738,7 +788,10 @@ class QueueObject {
             }
 
             if (/^http/.test(key_uri)) {
-              await download(key_uri, that.dir, { filename: "aes.key", headers: that.headers, timeout: httpTimeout, agent: proxy_agent }).catch(console.error);
+              await downloadTaskFile(this.id, key_uri, that.dir, { filename: "aes.key", headers: that.headers, timeout: httpTimeout, agent: proxy_agent }).catch((error) => {
+                if (globalCond[this.id]) logger.error(error);
+              });
+              if (!globalCond[this.id]) return;
             }
             else if (/^file:\/\/\//.test(key_uri)) {
               key_uri = key_uri.replace('file:///', '')
@@ -798,6 +851,7 @@ class QueueObject {
           break;
         }
       }
+      if (!globalCond[this.id]) return;
       if (fs.existsSync(filpath)) {
         this.then && this.then();
       }
@@ -820,6 +874,7 @@ function queue_callback(that, callback) {
 
 async function startDownload(object, iidx) {
   let id = !object.id ? (iidx != null ? (new Date().getTime() + iidx) : new Date().getTime()) : object.id;
+  globalCond[id] = true;
   let headers = object.headers;
   let url_prefix = object.url_prefix;
   let taskName = object.taskName;
@@ -849,11 +904,14 @@ async function startDownload(object, iidx) {
   }
   else {
     for (let index = 0; index < 3; index++) {
-      let response = await got(url_src, {
+      let response = await trackTaskRequest(id, got(url_src, {
         headers: headers, timeout: httpTimeout, agent: proxy_agent, https: {
           rejectUnauthorized: false
         }
-      }).catch(logger.error);
+      })).catch(error => {
+        if (globalCond[id]) logger.error(error);
+      });
+      if (!globalCond[id]) return;
       {
         if (response && response.body != null
           && response.body != '') {
@@ -877,6 +935,7 @@ async function startDownload(object, iidx) {
 
   //并发 2 个线程下载
   var tsQueues = async.queue(queue_callback, 10);
+  activeQueues.set(id, tsQueues);
 
   let count_seg = parser.manifest.segments.length;
   let count_downloaded = 0;
@@ -904,7 +963,6 @@ async function startDownload(object, iidx) {
   if (!object.id) {
     mainWindow && mainWindow.webContents.send('task-notify-create', video);
   }
-  globalCond[id] = true;
   let segments = parser.manifest.segments;
   for (let iSeg = 0; iSeg < segments.length; iSeg++) {
     let qo = new QueueObject();
@@ -917,6 +975,7 @@ async function startDownload(object, iidx) {
     qo.myKeyIV = myKeyIV;
     qo.segment = segments[iSeg];
     qo.then = function () {
+      if (!globalCond[id]) return;
       count_downloaded = count_downloaded + 1
       video.segment_downloaded = count_downloaded;
       video.status = `下载中...${count_downloaded}/${count_seg}`
@@ -925,6 +984,7 @@ async function startDownload(object, iidx) {
       }
     };
     qo.catch = function () {
+      if (!globalCond[id]) return;
       if (this.retry < 10) {
         tsQueues.push(this);
       }
@@ -942,7 +1002,8 @@ async function startDownload(object, iidx) {
     tsQueues.push(qo);
   }
   tsQueues.drain(async () => {
-    if (!video.success) {
+    activeQueues.delete(id);
+    if (!globalCond[id] || !video.success || !configVideos.includes(video)) {
       return;
     }
 
@@ -965,14 +1026,20 @@ async function startDownload(object, iidx) {
     let outPathMP4 = path.join(dir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     let outPathMP4_ = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, "") + '.mp4');
     if (fs.existsSync(ffmpegPath)) {
-      let ffmpegInputStream = new FFmpegStreamReadable(null);
-      new ffmpeg(ffmpegInputStream)
+      let ffmpegInputStream = createSegmentStream(fileSegments, (completed, total) => {
+        let percent = Number.parseInt(completed * 100 / total);
+        video.status = `合并中[${percent}%]`;
+        mainWindow.webContents.send('task-notify-end', video);
+      });
+      const mergeCommand = new ffmpeg(ffmpegInputStream)
         .setFfmpegPath(ffmpegPath)
         .videoCodec('copy')
         .audioCodec('copy')
         .format('mp4')
         .save(outPathMP4)
         .on('error', (error) => {
+          activeMerges.delete(id);
+          if (!globalCond[id]) return;
           logger.error(error)
           video.videopath = "";
           video.status = "合并出错，请尝试手动合并";
@@ -981,36 +1048,27 @@ async function startDownload(object, iidx) {
           fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
         })
         .on('end', function () {
+          activeMerges.delete(id);
+          if (!globalCond[id]) return;
           logger.info(`${outPathMP4} merge finished.`)
           video.videopath = "";
           fs.existsSync(outPathMP4) && (fs.renameSync(outPathMP4, outPathMP4_), video.videopath = outPathMP4_);
           video.status = "已完成"
           mainWindow.webContents.send('task-notify-end', video);
           if (video.taskIsDelTs) {
-            let index_path = path.join(dir, 'index.txt');
-            fs.existsSync(index_path) && fs.unlinkSync(index_path);
-            fileSegments.forEach(item => fs.existsSync(item) && fs.unlinkSync(item));
-            fs.rmdirSync(dir);
+            try {
+              cleanupDownloadedSegments(dir, fileSegments);
+            } catch (error) {
+              logger.warn(`清理临时片段失败: ${error.message}`);
+            }
           }
           fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
         })
         .on('progress', (info) => {
           logger.info(JSON.stringify(info));
         });
+      activeMerges.set(id, { command: mergeCommand, input: ffmpegInputStream });
 
-      for (let i = 0; i < fileSegments.length; i++) {
-        let percent = Number.parseInt((i + 1) * 100 / fileSegments.length);
-        video.status = `合并中[${percent}%]`;
-        mainWindow.webContents.send('task-notify-end', video);
-        let filePath = fileSegments[i];
-        fs.existsSync(filePath) && ffmpegInputStream.push(fs.readFileSync(filePath));
-        while (ffmpegInputStream._readableState.length > 0) {
-          await sleep(100);
-        }
-        console.log("push " + percent);
-      }
-      console.log("push(null) end");
-      ffmpegInputStream.push(null);
     }
     else {
       video.videopath = outPathMP4;
@@ -1029,6 +1087,27 @@ class FFmpegStreamReadable extends Readable {
     super(opt);
   }
   _read() { }
+}
+
+function createSegmentStream(files, onSegment) {
+  return Readable.from((async function* () {
+    for (let index = 0; index < files.length; index++) {
+      yield* fs.createReadStream(files[index]);
+      if (onSegment) onSegment(index + 1, files.length);
+    }
+  })(), { objectMode: false });
+}
+
+function cleanupDownloadedSegments(dir, fileSegments) {
+  for (const file of fileSegments) {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  }
+  for (const name of fs.readdirSync(dir)) {
+    if (name === 'index.txt' || name === 'aes.key' || /^\d{6}\.ts\.dl$/.test(name)) {
+      fs.unlinkSync(path.join(dir, name));
+    }
+  }
+  if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
 }
 
 async function startDownloadLive(object) {
@@ -1074,19 +1153,22 @@ async function startDownloadLive(object) {
     mainWindow.webContents.send('task-notify-create', video);
   }
 
-  let partent_uri = url.replace(/([^\/]*\?.*$)|([^\/]*$)/g, '');
   let segmentSet = new Set();
+  let nextLiveSegmentFile = 0;
   let ffmpegInputStream = null;
   let ffmpegObj = null;
   globalCond[id] = true;
   while (globalCond[id]) {
 
     try {
-      const response = await got(url, {
+      const response = await trackTaskRequest(id, got(url, {
         headers: headers, timeout: httpTimeout, agent: proxy_agent, https: {
           rejectUnauthorized: false
         }
-      }).catch(logger.error);
+      })).catch(error => {
+        if (globalCond[id]) logger.error(error);
+      });
+      if (!globalCond[id]) break;
       if (response == null || response.body == null || response.body == '') {
         break;
       }
@@ -1101,110 +1183,121 @@ async function startDownloadLive(object) {
         //开始下载片段的时间，下载完毕后，需要计算下次请求的时间
         let _startTime = new Date();
         let _videoDuration = 0;
-        for (let iSeg = 0; iSeg < segments.length; iSeg++) {
-          let segment = segments[iSeg];
-          if (segmentSet.has(segment.uri)) {
-            continue;
+        const newSegments = [];
+        const seen = new Set();
+        for (const segment of segments) {
+          if (!segmentSet.has(segment.uri) && !seen.has(segment.uri)) {
+            newSegments.push(segment);
+            seen.add(segment.uri);
           }
+        }
+
+        const pending = new Map();
+        let nextToFetch = 0;
+        const discardPending = () => {
+          for (const promise of pending.values()) {
+            promise.then(file => {
+              if (file && fs.existsSync(file)) fs.unlinkSync(file);
+            }).catch(logger.error);
+          }
+          pending.clear();
+        };
+        const prefetch = () => {
+          while (globalCond[id] && pending.size < 4 && nextToFetch < newSegments.length) {
+            const segment = newSegments[nextToFetch++];
+            const filename = `${(++nextLiveSegmentFile + '').padStart(6, '0')}.ts`;
+            const filpath = path.join(dir, filename);
+            const filpath_dl = filpath + '.dl';
+            const uri_ts = new URL(segment.uri, url).href;
+            pending.set(segment.uri, (async () => {
+              for (let attempt = 0; attempt < 3 && globalCond[id]; attempt++) {
+                try {
+                  await downloadTaskFile(id, uri_ts, dir, {
+                    filename: filename + '.dl', timeout: httpTimeout, headers: headers, agent: proxy_agent
+                  });
+                  if (!globalCond[id]) break;
+                  if (fs.existsSync(filpath_dl) && fs.statSync(filpath_dl).size > 0) {
+                    fs.renameSync(filpath_dl, filpath);
+                    return filpath;
+                  }
+                } catch (error) {
+                  if (globalCond[id]) logger.error(error);
+                }
+                if (fs.existsSync(filpath_dl)) fs.unlinkSync(filpath_dl);
+              }
+              return null;
+            })());
+          }
+        };
+
+        prefetch();
+        for (const segment of newSegments) {
           if (!globalCond[id]) {
+            discardPending();
             break;
           }
-          _videoDuration = _videoDuration + segment.duration * 1000;
-          let uri_ts = '';
-          if (/^http.*/.test(segment.uri)) {
-            uri_ts = segment.uri;
+          _videoDuration += (Number(segment.duration) || 0) * 1000;
+          const filpath = await pending.get(segment.uri);
+          pending.delete(segment.uri);
+          if (!globalCond[id]) {
+            if (filpath && fs.existsSync(filpath)) fs.unlinkSync(filpath);
+            discardPending();
+            break;
           }
-          else if (/^\/.*/.test(segment.uri)) {
-            let mes = url.match(/^https?:\/\/[^/]*/);
-            if (mes && mes.length >= 1) {
-              uri_ts = mes[0] + segment.uri;
-            }
-            else {
-              uri_ts = partent_uri + segment.uri;
-            }
+          if (!filpath) {
+            discardPending();
+            break;
           }
-          else {
-            uri_ts = partent_uri + segment.uri;
-          }
+          prefetch();
 
-          let filename = `${((count_downloaded + 1) + '').padStart(6, '0')}.ts`;
-          let filpath = path.join(dir, filename);
-          let filpath_dl = path.join(dir, filename + ".dl");
-
-          for (let index = 0; index < 3; index++) {
-            if (!globalCond[id]) {
-              break;
+          segmentSet.add(segment.uri);
+          if (ffmpegObj == null) {
+            let outPathMP4 = path.join(dir, id + '.mp4');
+            let newid = id;
+            while (fs.existsSync(outPathMP4)) {
+              outPathMP4 = path.join(dir, newid + '.mp4');
+              newid = newid + 1;
             }
-
-            //let tsStream = await got.get(uri_ts, {responseType:'buffer', timeout:httpTimeout ,headers:headers}).catch(logger.error).body();
-
-            await download(uri_ts, dir, { filename: filename + ".dl", timeout: httpTimeout, headers: headers, agent: proxy_agent }).catch((err) => {
-              logger.error(err)
-              if (fs.existsSync(filpath_dl)) {
-                fs.unlinkSync(filpath_dl);
-              }
-            });
-            if (fs.existsSync(filpath_dl)) {
-              let stat = fs.statSync(filpath_dl);
-              if (stat.size > 0) {
-                fs.renameSync(filpath_dl, filpath);
-              }
-              else {
-                fs.unlinkSync(filpath_dl);
-              }
-            }
-            if (fs.existsSync(filpath)) {
-              segmentSet.add(segment.uri);
-              if (ffmpegObj == null) {
-                let outPathMP4 = path.join(dir, id + '.mp4');
-                let newid = id;
-                //不要覆盖之前下载的直播内容
-                while (fs.existsSync(outPathMP4)) {
-                  outPathMP4 = path.join(dir, newid + '.mp4');
-                  newid = newid + 1;
-                }
-                if (fs.existsSync(ffmpegPath)) {
-                  ffmpegInputStream = new FFmpegStreamReadable(null);
-
-                  ffmpegObj = new ffmpeg(ffmpegInputStream)
-                    .setFfmpegPath(ffmpegPath)
-                    .videoCodec('copy')
-                    .audioCodec('copy')
-                    .save(outPathMP4)
-                    .on('error', logger.info)
-                    .on('end', function () {
-                      video.videopath = outPathMP4;
-                      video.status = "已完成";
-                      mainWindow.webContents.send('task-notify-end', video);
-
-                      fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
-                    })
-                    .on('progress', logger.info);
-                }
-                else {
+            if (fs.existsSync(ffmpegPath)) {
+              ffmpegInputStream = new FFmpegStreamReadable(null);
+              ffmpegObj = new ffmpeg(ffmpegInputStream)
+                .setFfmpegPath(ffmpegPath)
+                .videoCodec('copy')
+                .audioCodec('copy')
+                .save(outPathMP4)
+                .on('error', error => {
+                  activeMerges.delete(id);
+                  if (globalCond[id]) logger.error(error);
+                })
+                .on('end', function () {
+                  activeMerges.delete(id);
+                  if (!globalCond[id]) return;
                   video.videopath = outPathMP4;
-                  video.status = "已完成，未发现本地FFMPEG，不进行合成。"
-                  mainWindow.webContents.send('task-notify-update', video);
-                }
-              }
-
-              if (ffmpegInputStream) {
-                ffmpegInputStream.push(fs.readFileSync(filpath));
-                fs.unlinkSync(filpath);
-              }
-
-              //fs.appendFileSync(path.join(dir,'index.txt'),`file '${filpath}'\r\n`);
-              count_downloaded = count_downloaded + 1;
-              video.segment_downloaded = count_downloaded;
-              video.status = `直播中... [${count_downloaded}]`;
+                  video.status = '已完成';
+                  mainWindow.webContents.send('task-notify-end', video);
+                  fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
+                })
+                .on('progress', logger.info);
+              activeMerges.set(id, { command: ffmpegObj, input: ffmpegInputStream });
+            } else {
+              video.videopath = outPathMP4;
+              video.status = '已完成，未发现本地FFMPEG，不进行合成。';
               mainWindow.webContents.send('task-notify-update', video);
-              break;
             }
           }
+
+          if (ffmpegInputStream) {
+            ffmpegInputStream.push(fs.readFileSync(filpath));
+            fs.unlinkSync(filpath);
+          }
+          count_downloaded += 1;
+          video.segment_downloaded = count_downloaded;
+          video.status = `直播中... [${count_downloaded}]`;
+          mainWindow.webContents.send('task-notify-update', video);
         }
         if (globalCond[id]) {
           //使下次下载M3U8时间提前1秒钟。
-          _videoDuration = _videoDuration - 1000;
+          _videoDuration = Math.max(1000, _videoDuration - 1000);
           let _downloadTime = (new Date().getTime() - _startTime.getTime());
           if (_downloadTime < _videoDuration) {
             await sleep(_videoDuration - _downloadTime);
@@ -1217,14 +1310,14 @@ async function startDownloadLive(object) {
       parser = null;
     }
     catch (error) {
-      logger.info(error.response.body);
+      logger.error(error.response ? error.response.body : error);
     }
   }
-  if (ffmpegInputStream) {
+  if (ffmpegInputStream && globalCond[id]) {
     ffmpegInputStream.push(null);
   }
 
-  if (count_downloaded <= 0) {
+  if (count_downloaded <= 0 && globalCond[id]) {
     video.videopath = '';
     video.status = "已完成，下载失败"
     mainWindow.webContents.send('task-notify-end', video);
@@ -1248,6 +1341,7 @@ ipcMain.on('delvideo', function (event, id) {
   configVideos.forEach(Element => {
     if (Element.id == id) {
       try {
+        cancelTask(Element.id);
         if (false && fs.existsSync(Element.dir)) {
           var files = fs.readdirSync(Element.dir)
           files.forEach(e => {
@@ -1299,8 +1393,10 @@ ipcMain.on('StartOrStop', function (event, arg) {
     logger.info("不存在此任务")
     return;
   }
-  globalCond[id] = !globalCond[id];
-  if (globalCond[id] == true) {
+  if (globalCond[id]) {
+    cancelTask(id);
+  } else {
+    globalCond[id] = true;
     configVideos.forEach(Element => {
       if (Element.id == id) {
         if (Element.isLiving == true) {
@@ -1348,7 +1444,7 @@ ipcMain.on('set-config', function (event, data) {
         scheduling: 'lifo',
         proxy: config_proxy
       })
-    } : null;
+    } : direct_agent;
   }
 })
 
@@ -1461,7 +1557,10 @@ ipcMain.on('start-merge-ts', async function (event, task) {
 
   if (fs.existsSync(ffmpegPath)) {
     mainWindow.webContents.send('start-merge-ts-status', { code: 0, progress: 1, status: '开始合并...' });
-    ffmpegInputStream = new FFmpegStreamReadable(null);
+    const ffmpegInputStream = createSegmentStream(task.ts_files, (completed, total) => {
+      let percent = Number.parseInt(completed * 100 / total);
+      mainWindow.webContents.send('start-merge-ts-status', { code: 0, progress: percent, status: `合并中...[${percent}%]` });
+    });
 
     let ffmpegObj = new ffmpeg(ffmpegInputStream)
       .setFfmpegPath(ffmpegPath)
@@ -1481,18 +1580,6 @@ ipcMain.on('start-merge-ts', async function (event, task) {
         logger.info(JSON.stringify(info));
         mainWindow.webContents.send('start-merge-ts-status', { code: 0, progress: -1, status: JSON.stringify(info) });
       });
-    let count = task.ts_files.length
-    let _last = '';
-    for (let index = 0; index < count; index++) {
-      const file = task.ts_files[index];
-      ffmpegInputStream.push(fs.readFileSync(file));
-      while (ffmpegInputStream._readableState.length > 0) {
-        await sleep(200);
-      }
-      let precent = Number.parseInt((index + 1) * 100 / count);
-      mainWindow.webContents.send('start-merge-ts-status', { code: 0, progress: precent, status: `合并中...[${precent}%]` });
-    }
-    ffmpegInputStream.push(null);
   }
   else {
     mainWindow.webContents.send('start-merge-ts-status', { code: -1, progress: 100, status: '未检测到FFMPEG,不进行合并操作。' });
