@@ -66,7 +66,9 @@ test('live segments download concurrently and enter the merge stream in order', 
 
   try {
     vm.createContext(context);
-    vm.runInContext(`${source.slice(start, end)}\nthis.startDownloadLive = startDownloadLive;`, context);
+    const urlHelpersStart = source.indexOf('function normalizeTaskUrl(');
+    const urlHelpersEnd = source.indexOf('\nfunction transformConfig(', urlHelpersStart);
+    vm.runInContext(`${source.slice(urlHelpersStart, urlHelpersEnd)}\n${source.slice(start, end)}\nthis.startDownloadLive = startDownloadLive;`, context);
     await context.startDownloadLive({ id: 1, url: 'https://example.test/live/index.m3u8', taskName: 'live' });
     assert.ok(peak > 1 && peak <= 4, `unexpected concurrent downloads: ${peak}`);
     assert.equal(attempts.get('segment-3.ts'), 2);

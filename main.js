@@ -103,6 +103,14 @@ let globalConfigSaveVideoDir = '';
 
 const httpTimeout = { socket: 600000, request: 600000, response: 600000 };
 
+function normalizeTaskUrl(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveSegmentUrl(playlistUrl, segmentUri) {
+  return new URL(segmentUri.trim(), normalizeTaskUrl(playlistUrl)).href;
+}
+
 
 function transformConfig(config) {
   const result = []
@@ -452,7 +460,8 @@ ipcMain.on('task-clear', async function (event, object) {
 
 ipcMain.on('task-add', async function (event, object) {
   logger.info('event=task_add source=single');
-  let hlsSrc = object.url;
+  let hlsSrc = normalizeTaskUrl(object.url);
+  object.url = hlsSrc;
   let _headers = {};
   if (object.headers) {
     let __ = object.headers.match(/(.*?): ?(.*?)(\n|\r|$)/g);
@@ -579,6 +588,7 @@ ipcMain.on('task-add-muti', async function (event, object) {
         _obj.url = urls;
       }
 
+      _obj.url = normalizeTaskUrl(_obj.url);
       if (_obj.url) {
 
         let mes = _obj.url.match(/^https?:\/\/[^/]*/);
@@ -633,20 +643,8 @@ class QueueObject {
       let partent_uri = this.url.replace(/([^\/]*\?.*$)|([^\/]*$)/g, '');
       let segment = this.segment;
       let uri_ts = '';
-      if (/^http.*/.test(segment.uri)) {
-        uri_ts = segment.uri;
-      }
-      else if (/^http/.test(this.url) && /^\/.*/.test(segment.uri)) {
-        let mes = this.url.match(/^https?:\/\/[^/]*/);
-        if (mes && mes.length >= 1) {
-          uri_ts = mes[0] + segment.uri;
-        }
-        else {
-          uri_ts = partent_uri + (partent_uri.endsWith('/') || segment.uri.startWith('/') ? '' : "/") + segment.uri;
-        }
-      }
-      else if (/^http.*/.test(this.url)) {
-        uri_ts = partent_uri + (partent_uri.endsWith('/') || segment.uri.startWith('/') ? '' : "/") + segment.uri;
+      if (/^https?:\/\//i.test(this.url) || /^https?:\/\//i.test(segment.uri.trim())) {
+        uri_ts = resolveSegmentUrl(this.url, segment.uri);
       }
       else if (/^file:\/\/\//.test(this.url) && !this.url_prefix) {
         let fileDir = this.url.replace('file:///', '').replace(/[^\\/]{1,}$/, '');
@@ -665,7 +663,7 @@ class QueueObject {
         uri_ts = "file:///" + uri_ts
       }
       else if (/^file:\/\/\//.test(this.url) && this.url_prefix) {
-        uri_ts = this.url_prefix + (this.url_prefix.endsWith('/') || segment.uri.startWith('/') ? '' : "/") + segment.uri;
+        uri_ts = this.url_prefix + (this.url_prefix.endsWith('/') || segment.uri.startsWith('/') ? '' : "/") + segment.uri;
       }
 
       let filename = `${((this.idx + 1) + '').padStart(6, '0')}.ts`;
@@ -740,7 +738,7 @@ class QueueObject {
               key_uri = "file:///" + key_uri_;
             }
             else if (/^file:\/\/\//.test(this.url) && this.url_prefix && !/^http.*/.test(key_uri)) {
-              key_uri = this.url_prefix + (this.url_prefix.endsWith('/') || key_uri.startWith('/') ? '' : "/") + key_uri;
+              key_uri = this.url_prefix + (this.url_prefix.endsWith('/') || key_uri.startsWith('/') ? '' : "/") + key_uri;
             }
 
             if (/^http/.test(key_uri)) {
@@ -817,6 +815,7 @@ class QueueObject {
     }
     catch (e) {
       logger.error(e);
+      if (globalCond[this.id]) this.catch && this.catch();
     }
     finally {
       _callback();
@@ -835,7 +834,7 @@ async function startDownload(object, iidx) {
   let url_prefix = object.url_prefix;
   let taskName = object.taskName;
   let myKeyIV = object.myKeyIV;
-  let url_src = object.url;
+  let url_src = normalizeTaskUrl(object.url);
   let taskIsDelTs = object.taskIsDelTs;
   if (!taskName) {
     taskName = `${id}`;
@@ -1074,7 +1073,7 @@ async function startDownloadLive(object) {
   let headers = object.headers;
   let taskName = object.taskName;
   let myKeyIV = object.myKeyIV;
-  let url = object.url;
+  let url = normalizeTaskUrl(object.url);
   if (!taskName) {
     taskName = `${id}`;
   }
