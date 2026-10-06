@@ -123,7 +123,7 @@ function normalizeTaskUrl(value) {
 
 function playlistFailureMessage(error) {
   const status = error && error.response && error.response.statusCode;
-  if (status === 410) return '视频源已失效（HTTP 410），请从原页面重新获取 M3U8 链接';
+  if (status === 410) return '视频源请求被服务器拒绝（HTTP 410）；请检查链接、附加头或访问条件';
   if (status === 403) return '视频源拒绝访问（HTTP 403），请检查链接、附加头或登录状态';
   if (status === 404) return '找不到视频源（HTTP 404），请检查 M3U8 链接';
   return error ? `视频源解析失败：${error.message}` : '视频源没有可下载的片段，请检查 M3U8 链接';
@@ -575,11 +575,11 @@ ipcMain.on('task-add', async function (event, object) {
         duration += segment.duration;
       });
       info = `点播资源解析成功，有 ${count_seg} 个片段，时长：${formatTime(duration)}，即将开始缓存...`;
-      startDownload(object);
+      startDownload(object, undefined, parser.manifest);
     }
     else {
       info = `直播资源解析成功，即将开始缓存...`;
-      startDownloadLive(object);
+      startDownloadLive(object, parser.manifest);
     }
   }
   else if (parser.manifest.playlists && parser.manifest.playlists.length && parser.manifest.playlists.length >= 1) {
@@ -896,7 +896,7 @@ function scanDownloadedSegments(dir, count) {
   return { downloaded, missing };
 }
 
-async function startDownload(object, iidx) {
+async function startDownload(object, iidx, initialManifest) {
   const resuming = Boolean(object.id);
   let id = !object.id ? (iidx != null ? (new Date().getTime() + iidx) : new Date().getTime()) : object.id;
   globalCond[id] = true;
@@ -919,9 +919,12 @@ async function startDownload(object, iidx) {
   logger.info(`event=download_start task_id=${id} mode=vod output_dir=${JSON.stringify(dir)}`);
 
 
-  let parser = new Parser();
+  let parser = initialManifest ? { manifest: initialManifest } : new Parser();
   let playlistError = null;
-  if (/^file:\/\/\//g.test(url_src)) {
+  if (initialManifest) {
+    logger.info(`event=playlist_reused task_id=${id} segments=${(initialManifest.segments || []).length}`);
+  }
+  else if (/^file:\/\/\//g.test(url_src)) {
     parser.push(fs.readFileSync(url_src.replace(/^file:\/\/\//, '')));
     parser.end();
   }
@@ -1192,7 +1195,7 @@ function cleanupDownloadedSegments(dir, fileSegments) {
   if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
 }
 
-async function startDownloadLive(object) {
+async function startDownloadLive(object, initialManifest) {
   const resuming = Boolean(object.id);
   let id = !object.id ? new Date().getTime() : object.id;
   let headers = object.headers;
@@ -1247,23 +1250,26 @@ async function startDownloadLive(object) {
   while (globalCond[id]) {
 
     try {
-      const response = await trackTaskRequest(id, got(url, {
-        headers: headers, timeout: httpTimeout, agent: proxy_agent, https: {
-          rejectUnauthorized: false
-        }
-      })).catch(error => {
-        if (globalCond[id]) logger.error(error);
-      });
-      if (!globalCond[id]) break;
-      if (response == null || response.body == null || response.body == '') {
-        break;
+      let manifest = initialManifest;
+      initialManifest = null;
+      if (!manifest) {
+        const response = await trackTaskRequest(id, got(url, {
+          headers: headers, timeout: httpTimeout, agent: proxy_agent, https: {
+            rejectUnauthorized: false
+          }
+        })).catch(error => {
+          if (globalCond[id]) logger.error(error);
+        });
+        if (!globalCond[id]) break;
+        if (response == null || response.body == null || response.body == '') break;
+        let parser = new Parser();
+        parser.push(response.body);
+        parser.end();
+        manifest = parser.manifest;
       }
-      let parser = new Parser();
-      parser.push(response.body);
-      parser.end();
 
-      let count_seg = parser.manifest.segments.length;
-      let segments = parser.manifest.segments;
+      let count_seg = manifest.segments.length;
+      let segments = manifest.segments;
       logger.info(`解析到 ${count_seg} 片段`)
       if (count_seg > 0) {
         //开始下载片段的时间，下载完毕后，需要计算下次请求的时间
