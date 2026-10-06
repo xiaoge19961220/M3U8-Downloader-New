@@ -49,7 +49,32 @@ const _app = new Vue({
       wechatpayImages: donationImages('wechatpay')
     }
   },
+  computed: {
+    runningTaskCount: function () { return this.allVideos.filter(video => !video.completed && !video.paused && video.success !== false).length; },
+    pausedTaskCount: function () { return this.allVideos.filter(video => !video.completed && video.paused && video.success !== false).length; },
+    completedTaskCount: function () { return this.allVideos.filter(video => video.completed).length; },
+    failedTaskCount: function () { return this.allVideos.filter(video => !video.completed && video.success === false).length; }
+  },
   methods: {
+    taskTitle: function (video) {
+      return video.taskName || `任务 ${video.id}`;
+    },
+    taskState: function (video) {
+      if (video.completed) return 'finished';
+      if (!video.success) return 'failed';
+      return video.paused ? 'paused' : 'running';
+    },
+    taskStateLabel: function (video) {
+      const labels = { finished: '已完成', failed: '下载失败', paused: '已暂停', running: '下载中' };
+      return labels[this.taskState(video)];
+    },
+    taskProgress: function (video) {
+      if (video.completed) return 100;
+      const total = Number(video.segment_total);
+      const downloaded = Number(video.segment_downloaded);
+      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(downloaded)) return 0;
+      return Math.max(0, Math.min(100, Math.round(downloaded * 100 / total)));
+    },
     installEvent: function (e) {
       let that = this;
       ipcRenderer.on('get-version-reply', function (event, data) {

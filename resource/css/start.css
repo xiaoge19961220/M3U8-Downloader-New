@@ -325,3 +325,81 @@ html,body,#app,#app section,#app section .main{
 .heisir .el-divider__text{
     background-color: #00000000;
 }
+
+/* Refreshed download workspace */
+:root { --page: #f4f7fb; --surface: #fff; --ink: #17243a; --muted: #66758d; --line: #e4eaf2; --blue: #356ee8; }
+body, html { color: var(--ink); background: var(--page); }
+.el-header { position: relative; padding: 0 20px !important; background: #182e52; }
+.el-header .title { margin: 0; line-height: 50px; color: #fff; font-size: 15px; }
+.systemTool { position: absolute; top: 0; right: 8px; display: flex; height: 50px; margin: 0; }
+.systemTool .button { width: 42px; height: 50px; color: #dce7f9 !important; }
+.systemTool .el-button:hover { background: #29466f; }
+.systemTool .el-button:last-child:hover { background: #c93647; }
+.main { height: calc(100% - 50px) !important; }
+.main .el-tabs { border: 0; box-shadow: none; background: var(--page); }
+.main .el-tabs__header { margin: 0; padding: 0 20px; border-bottom: 1px solid var(--line); background: #fff; }
+.el-tabs--border-card > .el-tabs__header .el-tabs__item { height: 48px; line-height: 48px; color: var(--muted) !important; font-size: 14px; font-weight: 600; }
+.el-tabs--border-card > .el-tabs__header .el-tabs__item.is-active { color: var(--blue) !important; background: #fff !important; box-shadow: inset 0 -3px var(--blue); }
+.main .el-tabs .el-tabs__content { height: calc(100% - 48px); padding: 0; }
+.main .el-tab-pane { height: 100%; overflow: auto; }
+.main .el-tab-pane:not(:first-child) { padding: 24px; }
+.el-button--primary { background: var(--blue); border-color: var(--blue); }
+.el-button--primary:hover, .el-button--primary:focus { background: #245bd0; border-color: #245bd0; }
+.download-page { display: flex; flex-direction: column; height: 100%; padding: 24px 28px 16px; }
+.task-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.toolbar-heading h1 { margin: 0; font-size: 22px; line-height: 1.35; }
+.toolbar-heading p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.toolbar-actions { display: flex; flex: none; }
+.toolbar-actions .el-button { font-weight: 600; }
+.task-overview { display: flex; gap: 12px; margin: 21px 0 16px; }
+.task-overview > span { display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-size: 12px; }
+.task-overview strong { color: var(--ink); font-size: 16px; }
+.overview-dot { width: 7px; height: 7px; border-radius: 50%; background: #aab5c5; }
+.overview-dot.running { background: #4a86f7; }
+.overview-dot.paused { background: #eca33b; }
+.overview-dot.finished { background: #38aa78; }
+.overview-dot.failed { background: #db6670; }
+.heisir .main .TaskList { flex: 1; min-height: 0; width: auto; height: auto; margin: 0; padding: 0 4px 8px 0; border-radius: 0; background: transparent; list-style: none; overflow: auto; }
+.heisir .main .TaskList .task-card { width: auto; height: auto; margin: 0 0 11px; padding: 16px 18px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 3px 14px rgba(22,46,82,.035); text-align: left; }
+.task-card-main { display: flex; gap: 14px; min-width: 0; }
+.task-icon { display: grid; flex: 0 0 42px; place-items: center; width: 42px; height: 42px; border-radius: 10px; background: #eaf1ff; color: var(--blue); font-size: 21px; }
+.task-content { flex: 1; min-width: 0; }
+.task-heading { display: flex; align-items: center; gap: 10px; }
+.task-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.task-badge { flex: none; padding: 4px 8px; border-radius: 6px; background: #eaf1ff; color: var(--blue); font-size: 11px; font-weight: 700; }
+.task-badge.paused { background: #fff3dc; color: #a56810; }
+.task-badge.finished { background: #e6f7ef; color: #238356; }
+.task-badge.failed { background: #ffebed; color: #c13947; }
+.task-url { margin-top: 6px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.task-progress-line { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.task-progress { flex: 1; height: 6px; overflow: hidden; border-radius: 10px; background: #e9edf4; }
+.task-progress span { display: block; height: 100%; border-radius: inherit; background: #4a86f7; transition: width .2s; }
+.task-progress span.paused { background: #eca33b; }
+.task-progress span.finished { background: #38aa78; }
+.task-progress span.failed { background: #db6670; }
+.task-percentage { width: 38px; color: var(--muted); font-size: 12px; text-align: right; }
+.task-meta { display: flex; gap: 16px; margin-top: 9px; color: var(--muted); font-size: 12px; }
+.task-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-meta span:first-child { flex: 1; }
+.task-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 13px 0 0 56px; padding-top: 11px; border-top: 1px solid #eef1f6; }
+.task-action { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #52627b; font-size: 12px; cursor: pointer; }
+.task-action:hover { border-color: #c3d2ed; background: #f6f9ff; color: var(--blue); }
+.task-action.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+.task-action.primary:hover { background: #245bd0; }
+.task-action.danger:hover { border-color: #eab4ba; background: #fff3f4; color: #c13947; }
+.task-action:disabled { cursor: not-allowed; opacity: .46; }
+.task-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; min-height: 210px; border: 1px dashed #cbd7e8; border-radius: 12px; background: #fff; text-align: center; }
+.empty-icon { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 16px; background: #eaf1ff; color: var(--blue); font-size: 26px; }
+.task-empty h2 { margin: 15px 0 0; font-size: 17px; }
+.task-empty p { margin: 7px 0 18px; color: var(--muted); font-size: 13px; }
+.el-dialog { max-width: 760px; border-radius: 12px; overflow: hidden; }
+.el-dialog__body { max-height: 65vh; overflow: auto; }
+.paycode .el-card__body { padding: 15px; text-align: center; }
+@media (max-width: 760px) {
+  .download-page { padding: 16px; }
+  .toolbar-heading p { display: none; }
+  .task-overview { gap: 6px; flex-wrap: wrap; margin: 14px 0; }
+  .task-overview > span { padding: 6px 9px; }
+  .task-meta span:last-child { display: none; }
+  .task-actions { margin-left: 0; flex-wrap: wrap; }
+}
