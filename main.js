@@ -121,6 +121,14 @@ function normalizeTaskUrl(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function playlistFailureMessage(error) {
+  const status = error && error.response && error.response.statusCode;
+  if (status === 410) return '视频源已失效（HTTP 410），请从原页面重新获取 M3U8 链接';
+  if (status === 403) return '视频源拒绝访问（HTTP 403），请检查链接、附加头或登录状态';
+  if (status === 404) return '找不到视频源（HTTP 404），请检查 M3U8 链接';
+  return error ? `视频源解析失败：${error.message}` : '视频源没有可下载的片段，请检查 M3U8 链接';
+}
+
 function resolveSegmentUrl(playlistUrl, segmentUri) {
   return new URL(segmentUri.trim(), normalizeTaskUrl(playlistUrl)).href;
 }
@@ -518,6 +526,7 @@ ipcMain.on('task-add', async function (event, object) {
 
   let info = '解析资源失败！';
   let code = -1;
+  let playlistError = null;
 
   let parser = new Parser();
   if (/^file:\/\/\//g.test(hlsSrc)) {
@@ -531,15 +540,19 @@ ipcMain.on('task-add', async function (event, object) {
         headers: _headers, timeout: httpTimeout, agent: proxy_agent, https: {
           rejectUnauthorized: false
         }
-      }).catch(logger.error);
+      }).catch(error => {
+        playlistError = error;
+        logger.error(error);
+      });
+      if (playlistError && playlistError.response && playlistError.response.statusCode === 410) break;
       {
         if (response && response.body != null
           && response.body != '') {
           parser.push(response.body);
           parser.end();
 
-          if (!parser.manifest.segments || !parser.manifest.segments.length
-            && parser.manifest.playlists && parser.manifest.playlists.length && parser.manifest.playlists.length >= 1) {
+          if ((!parser.manifest.segments || !parser.manifest.segments.length)
+            && parser.manifest.playlists && parser.manifest.playlists.length) {
             hlsSrc = url.resolve(hlsSrc, parser.manifest.playlists[0].uri);
             logger.info(`redirect ${parser.manifest.playlists[0].uri} to ${hlsSrc} index:${index}`);
             object.url = hlsSrc;
@@ -553,7 +566,7 @@ ipcMain.on('task-add', async function (event, object) {
     }
   }
 
-  let count_seg = parser.manifest.segments.length;
+  let count_seg = (parser.manifest.segments || []).length;
   if (count_seg > 0) {
     code = 0;
     if (parser.manifest.endList) {
@@ -573,6 +586,9 @@ ipcMain.on('task-add', async function (event, object) {
     code = 1;
     event.sender.send('task-add-reply', { code: code, message: '', playlists: parser.manifest.playlists });
     return;
+  }
+  else {
+    info = playlistFailureMessage(playlistError);
   }
   event.sender.send('task-add-reply', { code: code, message: info });
 });
@@ -903,11 +919,8 @@ async function startDownload(object, iidx) {
   logger.info(`event=download_start task_id=${id} mode=vod output_dir=${JSON.stringify(dir)}`);
 
 
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
   let parser = new Parser();
+  let playlistError = null;
   if (/^file:\/\/\//g.test(url_src)) {
     parser.push(fs.readFileSync(url_src.replace(/^file:\/\/\//, '')));
     parser.end();
@@ -919,17 +932,19 @@ async function startDownload(object, iidx) {
           rejectUnauthorized: false
         }
       })).catch(error => {
+        playlistError = error;
         if (isActive()) logger.error(error);
       });
       if (!isActive()) return;
+      if (playlistError && playlistError.response && playlistError.response.statusCode === 410) break;
       {
         if (response && response.body != null
           && response.body != '') {
           parser.push(response.body);
           parser.end();
 
-          if (!parser.manifest.segments || !parser.manifest.segments.length
-            && parser.manifest.playlists && parser.manifest.playlists.length && parser.manifest.playlists.length >= 1) {
+          if ((!parser.manifest.segments || !parser.manifest.segments.length)
+            && parser.manifest.playlists && parser.manifest.playlists.length) {
             url_src = url.resolve(url_src, parser.manifest.playlists[0].uri);
             logger.info(`redirect ${parser.manifest.playlists[0].uri} to ${url_src} index:${index}`);
             index = 0;
@@ -942,12 +957,33 @@ async function startDownload(object, iidx) {
     }
   }
 
+  const playlistSegments = parser.manifest.segments || [];
+  if (!playlistSegments.length) {
+    const message = playlistFailureMessage(playlistError);
+    globalCond[id] = false;
+    activeRuns.delete(id);
+    const failedVideo = resuming ? object : {
+      id, url: url_src, url_prefix, dir, time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss"),
+      isLiving: false, headers, taskName, myKeyIV, taskIsDelTs, videopath: '',
+      segment_total: 0, segment_downloaded: 0
+    };
+    failedVideo.success = false;
+    failedVideo.paused = true;
+    failedVideo.completed = false;
+    failedVideo.status = message;
+    if (!resuming) configVideos.splice(0, 0, failedVideo);
+    fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
+    mainWindow && mainWindow.webContents.send(resuming ? 'task-notify-update' : 'task-notify-create', failedVideo);
+    logger.error(`event=playlist_failed task_id=${id} message=${JSON.stringify(message)}`);
+    return;
+  }
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   //并发 2 个线程下载
   var tsQueues = async.queue(queue_callback, 10);
   activeQueues.set(id, tsQueues);
 
-  let count_seg = parser.manifest.segments.length;
+  let count_seg = (parser.manifest.segments || []).length;
   logger.info(`event=playlist_parsed task_id=${id} segments=${count_seg}`);
   let count_downloaded = 0;
   var video = resuming ? object : {
