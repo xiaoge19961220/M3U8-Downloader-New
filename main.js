@@ -102,6 +102,7 @@ const direct_agent = {
 let proxy_agent = direct_agent;
 
 let globalConfigSaveVideoDir = '';
+const reservedDownloadDirs = new Set();
 
 const httpTimeout = { socket: 600000, request: 600000, response: 600000 };
 const DEFAULT_SEGMENT_RETRIES = 9;
@@ -118,6 +119,37 @@ function getConfiguredSegmentRetryCount() {
 
 function normalizeTaskUrl(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function taskFileName(name) {
+  return String(name).replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, '');
+}
+
+function uniqueTaskName(name, id, root) {
+  const base = taskFileName(name) ? String(name).trim() : String(id);
+  let candidate = base;
+  let suffix = 0;
+  while (true) {
+    const safeName = taskFileName(candidate);
+    const dir = path.resolve(root, safeName);
+    const key = dir.toLowerCase();
+    const usedByTask = configVideos.some(video => video.dir && path.resolve(video.dir).toLowerCase() === key);
+    if (!reservedDownloadDirs.has(key) && !usedByTask && !fs.existsSync(dir)
+      && !fs.existsSync(path.join(root, `${safeName}.mp4`))) {
+      reservedDownloadDirs.add(key);
+      return candidate;
+    }
+    candidate = `${base}-${id}${suffix ? `-${suffix}` : ''}`;
+    suffix++;
+  }
+}
+
+function playlistFailureMessage(error) {
+  const status = error && error.response && error.response.statusCode;
+  if (status === 410) return '视频源请求被服务器拒绝（HTTP 410）；请检查链接、附加头或访问条件';
+  if (status === 403) return '视频源拒绝访问（HTTP 403），请检查链接、附加头或登录状态';
+  if (status === 404) return '找不到视频源（HTTP 404），请检查 M3U8 链接';
+  return error ? `视频源解析失败：${error.message}` : '视频源没有可下载的片段，请检查 M3U8 链接';
 }
 
 function resolveSegmentUrl(playlistUrl, segmentUri) {
@@ -516,6 +548,7 @@ ipcMain.on('task-add', async function (event, object) {
 
   let info = '解析资源失败！';
   let code = -1;
+  let playlistError = null;
 
   let parser = new Parser();
   if (/^file:\/\/\//g.test(hlsSrc)) {
@@ -529,15 +562,19 @@ ipcMain.on('task-add', async function (event, object) {
         headers: _headers, timeout: httpTimeout, agent: proxy_agent, https: {
           rejectUnauthorized: false
         }
-      }).catch(logger.error);
+      }).catch(error => {
+        playlistError = error;
+        logger.error(error);
+      });
+      if (playlistError && playlistError.response && playlistError.response.statusCode === 410) break;
       {
         if (response && response.body != null
           && response.body != '') {
           parser.push(response.body);
           parser.end();
 
-          if (!parser.manifest.segments || !parser.manifest.segments.length
-            && parser.manifest.playlists && parser.manifest.playlists.length && parser.manifest.playlists.length >= 1) {
+          if ((!parser.manifest.segments || !parser.manifest.segments.length)
+            && parser.manifest.playlists && parser.manifest.playlists.length) {
             hlsSrc = url.resolve(hlsSrc, parser.manifest.playlists[0].uri);
             logger.info(`redirect ${parser.manifest.playlists[0].uri} to ${hlsSrc} index:${index}`);
             object.url = hlsSrc;
@@ -551,7 +588,7 @@ ipcMain.on('task-add', async function (event, object) {
     }
   }
 
-  let count_seg = parser.manifest.segments.length;
+  let count_seg = (parser.manifest.segments || []).length;
   if (count_seg > 0) {
     code = 0;
     if (parser.manifest.endList) {
@@ -560,17 +597,20 @@ ipcMain.on('task-add', async function (event, object) {
         duration += segment.duration;
       });
       info = `点播资源解析成功，有 ${count_seg} 个片段，时长：${formatTime(duration)}，即将开始缓存...`;
-      startDownload(object);
+      startDownload(object, undefined, parser.manifest);
     }
     else {
       info = `直播资源解析成功，即将开始缓存...`;
-      startDownloadLive(object);
+      startDownloadLive(object, parser.manifest);
     }
   }
   else if (parser.manifest.playlists && parser.manifest.playlists.length && parser.manifest.playlists.length >= 1) {
     code = 1;
     event.sender.send('task-add-reply', { code: code, message: '', playlists: parser.manifest.playlists });
     return;
+  }
+  else {
+    info = playlistFailureMessage(playlistError);
   }
   event.sender.send('task-add-reply', { code: code, message: info });
 });
@@ -878,7 +918,7 @@ function scanDownloadedSegments(dir, count) {
   return { downloaded, missing };
 }
 
-async function startDownload(object, iidx) {
+async function startDownload(object, iidx, initialManifest) {
   const resuming = Boolean(object.id);
   let id = !object.id ? (iidx != null ? (new Date().getTime() + iidx) : new Date().getTime()) : object.id;
   globalCond[id] = true;
@@ -891,24 +931,21 @@ async function startDownload(object, iidx) {
   let myKeyIV = object.myKeyIV;
   let url_src = normalizeTaskUrl(object.url);
   let taskIsDelTs = object.taskIsDelTs;
-  if (!taskName) {
-    taskName = `${id}`;
-  }
-  let dir = path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download/' + taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""));
-  if (globalConfigSaveVideoDir) {
-    dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
-  }
+  if (!taskName || !taskName.trim()) taskName = `${id}`;
+  const downloadRoot = globalConfigSaveVideoDir || path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download');
+  if (!resuming) taskName = uniqueTaskName(taskName, id, downloadRoot);
+  let dir = path.join(downloadRoot, taskFileName(taskName));
   if (resuming && object.dir) dir = object.dir;
 
   logger.info(`event=download_start task_id=${id} mode=vod output_dir=${JSON.stringify(dir)}`);
 
 
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  let parser = initialManifest ? { manifest: initialManifest } : new Parser();
+  let playlistError = null;
+  if (initialManifest) {
+    logger.info(`event=playlist_reused task_id=${id} segments=${(initialManifest.segments || []).length}`);
   }
-
-  let parser = new Parser();
-  if (/^file:\/\/\//g.test(url_src)) {
+  else if (/^file:\/\/\//g.test(url_src)) {
     parser.push(fs.readFileSync(url_src.replace(/^file:\/\/\//, '')));
     parser.end();
   }
@@ -919,17 +956,19 @@ async function startDownload(object, iidx) {
           rejectUnauthorized: false
         }
       })).catch(error => {
+        playlistError = error;
         if (isActive()) logger.error(error);
       });
       if (!isActive()) return;
+      if (playlistError && playlistError.response && playlistError.response.statusCode === 410) break;
       {
         if (response && response.body != null
           && response.body != '') {
           parser.push(response.body);
           parser.end();
 
-          if (!parser.manifest.segments || !parser.manifest.segments.length
-            && parser.manifest.playlists && parser.manifest.playlists.length && parser.manifest.playlists.length >= 1) {
+          if ((!parser.manifest.segments || !parser.manifest.segments.length)
+            && parser.manifest.playlists && parser.manifest.playlists.length) {
             url_src = url.resolve(url_src, parser.manifest.playlists[0].uri);
             logger.info(`redirect ${parser.manifest.playlists[0].uri} to ${url_src} index:${index}`);
             index = 0;
@@ -942,12 +981,33 @@ async function startDownload(object, iidx) {
     }
   }
 
+  const playlistSegments = parser.manifest.segments || [];
+  if (!playlistSegments.length) {
+    const message = playlistFailureMessage(playlistError);
+    globalCond[id] = false;
+    activeRuns.delete(id);
+    const failedVideo = resuming ? object : {
+      id, url: url_src, url_prefix, dir, time: dateFormat(new Date(), "yyyy-mm-dd HH:MM:ss"),
+      isLiving: false, headers, taskName, myKeyIV, taskIsDelTs, videopath: '',
+      segment_total: 0, segment_downloaded: 0
+    };
+    failedVideo.success = false;
+    failedVideo.paused = true;
+    failedVideo.completed = false;
+    failedVideo.status = message;
+    if (!resuming) configVideos.splice(0, 0, failedVideo);
+    fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
+    mainWindow && mainWindow.webContents.send(resuming ? 'task-notify-update' : 'task-notify-create', failedVideo);
+    logger.error(`event=playlist_failed task_id=${id} message=${JSON.stringify(message)}`);
+    return;
+  }
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   //并发 2 个线程下载
   var tsQueues = async.queue(queue_callback, 10);
   activeQueues.set(id, tsQueues);
 
-  let count_seg = parser.manifest.segments.length;
+  let count_seg = (parser.manifest.segments || []).length;
   logger.info(`event=playlist_parsed task_id=${id} segments=${count_seg}`);
   let count_downloaded = 0;
   var video = resuming ? object : {
@@ -1156,7 +1216,7 @@ function cleanupDownloadedSegments(dir, fileSegments) {
   if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
 }
 
-async function startDownloadLive(object) {
+async function startDownloadLive(object, initialManifest) {
   const resuming = Boolean(object.id);
   let id = !object.id ? new Date().getTime() : object.id;
   let headers = object.headers;
@@ -1164,13 +1224,10 @@ async function startDownloadLive(object) {
   let myKeyIV = object.myKeyIV;
   let url = normalizeTaskUrl(object.url);
   const maxRetries = getConfiguredSegmentRetryCount();
-  if (!taskName) {
-    taskName = `${id}`;
-  }
-  let dir = path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download/' + taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""));
-  if (globalConfigSaveVideoDir) {
-    dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
-  }
+  if (!taskName || !taskName.trim()) taskName = `${id}`;
+  const downloadRoot = globalConfigSaveVideoDir || path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download');
+  if (!resuming) taskName = uniqueTaskName(taskName, id, downloadRoot);
+  let dir = path.join(downloadRoot, taskFileName(taskName));
   if (resuming && object.dir) dir = object.dir;
   logger.info(`event=download_start task_id=${id} mode=live output_dir=${JSON.stringify(dir)}`);
   if (!fs.existsSync(dir)) {
@@ -1213,23 +1270,26 @@ async function startDownloadLive(object) {
   while (globalCond[id]) {
 
     try {
-      const response = await trackTaskRequest(id, got(url, {
-        headers: headers, timeout: httpTimeout, agent: proxy_agent, https: {
-          rejectUnauthorized: false
-        }
-      })).catch(error => {
-        if (globalCond[id]) logger.error(error);
-      });
-      if (!globalCond[id]) break;
-      if (response == null || response.body == null || response.body == '') {
-        break;
+      let manifest = initialManifest;
+      initialManifest = null;
+      if (!manifest) {
+        const response = await trackTaskRequest(id, got(url, {
+          headers: headers, timeout: httpTimeout, agent: proxy_agent, https: {
+            rejectUnauthorized: false
+          }
+        })).catch(error => {
+          if (globalCond[id]) logger.error(error);
+        });
+        if (!globalCond[id]) break;
+        if (response == null || response.body == null || response.body == '') break;
+        let parser = new Parser();
+        parser.push(response.body);
+        parser.end();
+        manifest = parser.manifest;
       }
-      let parser = new Parser();
-      parser.push(response.body);
-      parser.end();
 
-      let count_seg = parser.manifest.segments.length;
-      let segments = parser.manifest.segments;
+      let count_seg = manifest.segments.length;
+      let segments = manifest.segments;
       logger.info(`解析到 ${count_seg} 片段`)
       if (count_seg > 0) {
         //开始下载片段的时间，下载完毕后，需要计算下次请求的时间
@@ -1395,7 +1455,7 @@ function removeTaskDownloads(video, otherVideos) {
   const dir = path.resolve(video.dir);
   if (path.basename(dir) !== name) throw new Error('Task directory does not match task name');
   if (otherVideos.some(other => other.dir && path.resolve(other.dir) === dir)) {
-    throw new Error('Task directory is shared with another task');
+    return false;
   }
   if (fs.existsSync(dir)) {
     if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('Task directory is a symbolic link');
@@ -1403,6 +1463,7 @@ function removeTaskDownloads(video, otherVideos) {
   }
   const output = path.join(path.dirname(dir), `${name}.mp4`);
   if (fs.existsSync(output)) fs.rmSync(output, { force: true, maxRetries: 5, retryDelay: 100 });
+  return true;
 }
 
 ipcMain.on('delvideo', function (event, id) {
@@ -1410,14 +1471,14 @@ ipcMain.on('delvideo', function (event, id) {
     if (Element.id == id) {
       try {
         cancelTask(Element.id);
-        removeTaskDownloads(Element, configVideos.filter(video => video.id != Element.id));
-        logger.info(`event=task_delete task_id=${Element.id} files=deleted`);
+        const filesDeleted = removeTaskDownloads(Element, configVideos.filter(video => video.id != Element.id));
+        logger.info(`event=task_delete task_id=${Element.id} files=${filesDeleted ? 'deleted' : 'shared_retained'}`);
         var nIdx = configVideos.indexOf(Element);
         if (nIdx > -1) {
           configVideos.splice(nIdx, 1);
           fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
         }
-        event.sender.send("delvideo-reply", Element);
+        event.sender.send("delvideo-reply", { id: Element.id, filesDeleted });
       } catch (error) {
         logger.error(error)
       }
