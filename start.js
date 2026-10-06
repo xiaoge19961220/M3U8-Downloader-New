@@ -2,7 +2,6 @@ const { ipcRenderer } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
-const { inferTaskName } = require('./resource/js/task-name');
 
 function donationImages(folder) {
   const directory = path.join(__dirname, 'resource', folder);
@@ -33,7 +32,6 @@ const _app = new Vue({
       myKeyIV: '',
       myLocalKeyIV: '',
       taskName: '',
-      autoTaskName: '',
       taskIsDelTs: true,
       allVideos: [],
       tabPane: '',
@@ -157,6 +155,9 @@ const _app = new Vue({
       });
 
       ipcRenderer.on('delvideo-reply', function (event, data) {
+        if (data.filesDeleted === false) {
+          that.$message({ type: 'info', message: '任务已删除；下载目录与其他任务共用，文件已保留', duration: 3500 });
+        }
         for (let idx = 0; idx < that.allVideos.length; idx++) {
           let e = that.allVideos[idx];
           if (e.id == data.id) {
@@ -267,11 +268,6 @@ const _app = new Vue({
       ipcRenderer.send('set-config', { key: 'segment_retry_count', value: value });
     },
     m3u8UrlChange: function () {
-      const suggestedName = inferTaskName(this.m3u8_url);
-      if (!this.taskName || this.taskName === this.autoTaskName) {
-        this.taskName = suggestedName;
-      }
-      this.autoTaskName = suggestedName;
       this.playlists = [];
       this.playlistUri = '';
       this.addTaskMessage = "请输入M3U8视频源";

@@ -13,7 +13,7 @@ test('single download reports HTTP 410 without creating a task', async () => {
   let requests = 0;
   const context = {
     ipcMain: { on: (name, handler) => { handlers[name] = handler; } },
-    normalizeTaskUrl: value => value.trim(), inferTaskName: () => '',
+    normalizeTaskUrl: value => value.trim(),
     Parser: class { constructor() { this.manifest = { segments: [], playlists: [] }; } },
     got: async () => { requests++; throw expired; },
     logger: { info() {}, error() {} }, httpTimeout: {}, proxy_agent: {},
@@ -39,7 +39,7 @@ test('single download passes its first parsed playlist to the downloader', async
   let passedManifest;
   const context = {
     ipcMain: { on: (name, handler) => { handlers[name] = handler; } },
-    normalizeTaskUrl: value => value.trim(), inferTaskName: () => '',
+    normalizeTaskUrl: value => value.trim(),
     Parser: class {
       constructor() { this.manifest = { segments: [] }; }
       push() { this.manifest.segments = [{ uri: 'part.ts', duration: 4 }]; }
@@ -70,7 +70,7 @@ test('batch download marks a zero-segment task as failed before queuing or mergi
     app: { getAppPath: () => 'C:/app' }, path, fs: { writeFileSync() {} },
     globalCond: {}, activeRuns: new Map(), activeQueues: new Map(),
     globalConfigSaveVideoDir: 'C:/downloads', globalConfigVideoPath: 'unused', configVideos: videos,
-    normalizeTaskUrl: value => value.trim(), inferTaskName: () => 'example',
+    normalizeTaskUrl: value => value.trim(), uniqueTaskName: name => name, taskFileName: name => name,
     Parser: class { constructor() { this.manifest = { segments: [] }; } },
     got: async () => { throw expired; }, trackTaskRequest: (id, request) => request,
     logger: { info() {}, error() {} }, httpTimeout: {}, proxy_agent: {},
@@ -100,7 +100,7 @@ test('single download reuses the validated playlist instead of requesting it aga
     fs: { existsSync: () => false, mkdirSync() {}, writeFileSync() {} },
     globalCond: {}, activeRuns: new Map(), activeQueues: new Map(),
     globalConfigSaveVideoDir: 'C:/downloads', globalConfigVideoPath: 'unused', configVideos: videos,
-    normalizeTaskUrl: value => value.trim(), inferTaskName: () => 'example',
+    normalizeTaskUrl: value => value.trim(), uniqueTaskName: name => name, taskFileName: name => name,
     got: () => assert.fail('playlist must not be requested twice'),
     logger: { info() {}, error() {} }, httpTimeout: {}, proxy_agent: {},
     dateFormat: () => 'now', scanDownloadedSegments: () => ({ downloaded: 0, missing: [0] }),

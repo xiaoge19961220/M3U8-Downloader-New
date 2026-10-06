@@ -24,7 +24,6 @@ const Aria2 = require('aria2');
 const forever = require('forever-monitor');
 const { HttpProxyAgent, HttpsProxyAgent } = require('hpagent');
 const url = require('url');
-const { inferTaskName } = require('./resource/js/task-name');
 
 contextMenu({ showCopyImage: false, showCopyImageAddress: false, showInspectElement: false, showServices: false });
 
@@ -103,6 +102,7 @@ const direct_agent = {
 let proxy_agent = direct_agent;
 
 let globalConfigSaveVideoDir = '';
+const reservedDownloadDirs = new Set();
 
 const httpTimeout = { socket: 600000, request: 600000, response: 600000 };
 const DEFAULT_SEGMENT_RETRIES = 9;
@@ -119,6 +119,29 @@ function getConfiguredSegmentRetryCount() {
 
 function normalizeTaskUrl(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function taskFileName(name) {
+  return String(name).replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, '');
+}
+
+function uniqueTaskName(name, id, root) {
+  const base = taskFileName(name) ? String(name).trim() : String(id);
+  let candidate = base;
+  let suffix = 0;
+  while (true) {
+    const safeName = taskFileName(candidate);
+    const dir = path.resolve(root, safeName);
+    const key = dir.toLowerCase();
+    const usedByTask = configVideos.some(video => video.dir && path.resolve(video.dir).toLowerCase() === key);
+    if (!reservedDownloadDirs.has(key) && !usedByTask && !fs.existsSync(dir)
+      && !fs.existsSync(path.join(root, `${safeName}.mp4`))) {
+      reservedDownloadDirs.add(key);
+      return candidate;
+    }
+    candidate = `${base}-${id}${suffix ? `-${suffix}` : ''}`;
+    suffix++;
+  }
 }
 
 function playlistFailureMessage(error) {
@@ -499,7 +522,6 @@ ipcMain.on('task-add', async function (event, object) {
   logger.info('event=task_add source=single');
   let hlsSrc = normalizeTaskUrl(object.url);
   object.url = hlsSrc;
-  if (!object.taskName || !object.taskName.trim()) object.taskName = inferTaskName(hlsSrc);
   let _headers = {};
   if (object.headers) {
     let __ = object.headers.match(/(.*?): ?(.*?)(\n|\r|$)/g);
@@ -909,11 +931,10 @@ async function startDownload(object, iidx, initialManifest) {
   let myKeyIV = object.myKeyIV;
   let url_src = normalizeTaskUrl(object.url);
   let taskIsDelTs = object.taskIsDelTs;
-  if (!taskName || !taskName.trim()) taskName = inferTaskName(url_src) || `${id}`;
-  let dir = path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download/' + taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""));
-  if (globalConfigSaveVideoDir) {
-    dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
-  }
+  if (!taskName || !taskName.trim()) taskName = `${id}`;
+  const downloadRoot = globalConfigSaveVideoDir || path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download');
+  if (!resuming) taskName = uniqueTaskName(taskName, id, downloadRoot);
+  let dir = path.join(downloadRoot, taskFileName(taskName));
   if (resuming && object.dir) dir = object.dir;
 
   logger.info(`event=download_start task_id=${id} mode=vod output_dir=${JSON.stringify(dir)}`);
@@ -1203,11 +1224,10 @@ async function startDownloadLive(object, initialManifest) {
   let myKeyIV = object.myKeyIV;
   let url = normalizeTaskUrl(object.url);
   const maxRetries = getConfiguredSegmentRetryCount();
-  if (!taskName || !taskName.trim()) taskName = inferTaskName(url) || `${id}`;
-  let dir = path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download/' + taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""));
-  if (globalConfigSaveVideoDir) {
-    dir = path.join(globalConfigSaveVideoDir, taskName.replace(/["“”，\.。\|\/\\ \*:;\?<>]/g, ""))
-  }
+  if (!taskName || !taskName.trim()) taskName = `${id}`;
+  const downloadRoot = globalConfigSaveVideoDir || path.join(app.getAppPath().replace(/resources\\app.asar$/g, ""), 'download');
+  if (!resuming) taskName = uniqueTaskName(taskName, id, downloadRoot);
+  let dir = path.join(downloadRoot, taskFileName(taskName));
   if (resuming && object.dir) dir = object.dir;
   logger.info(`event=download_start task_id=${id} mode=live output_dir=${JSON.stringify(dir)}`);
   if (!fs.existsSync(dir)) {
@@ -1435,7 +1455,7 @@ function removeTaskDownloads(video, otherVideos) {
   const dir = path.resolve(video.dir);
   if (path.basename(dir) !== name) throw new Error('Task directory does not match task name');
   if (otherVideos.some(other => other.dir && path.resolve(other.dir) === dir)) {
-    throw new Error('Task directory is shared with another task');
+    return false;
   }
   if (fs.existsSync(dir)) {
     if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('Task directory is a symbolic link');
@@ -1443,6 +1463,7 @@ function removeTaskDownloads(video, otherVideos) {
   }
   const output = path.join(path.dirname(dir), `${name}.mp4`);
   if (fs.existsSync(output)) fs.rmSync(output, { force: true, maxRetries: 5, retryDelay: 100 });
+  return true;
 }
 
 ipcMain.on('delvideo', function (event, id) {
@@ -1450,14 +1471,14 @@ ipcMain.on('delvideo', function (event, id) {
     if (Element.id == id) {
       try {
         cancelTask(Element.id);
-        removeTaskDownloads(Element, configVideos.filter(video => video.id != Element.id));
-        logger.info(`event=task_delete task_id=${Element.id} files=deleted`);
+        const filesDeleted = removeTaskDownloads(Element, configVideos.filter(video => video.id != Element.id));
+        logger.info(`event=task_delete task_id=${Element.id} files=${filesDeleted ? 'deleted' : 'shared_retained'}`);
         var nIdx = configVideos.indexOf(Element);
         if (nIdx > -1) {
           configVideos.splice(nIdx, 1);
           fs.writeFileSync(globalConfigVideoPath, JSON.stringify(configVideos));
         }
-        event.sender.send("delvideo-reply", Element);
+        event.sender.send("delvideo-reply", { id: Element.id, filesDeleted });
       } catch (error) {
         logger.error(error)
       }

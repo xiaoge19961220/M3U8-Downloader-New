@@ -97,8 +97,7 @@
                     </el-select>
                   </el-form-item>
                   <el-form-item label="任务名" label-position="right">
-                    <el-input type="text" placeholder="自动从视频源链接或文件名提取；也可手动填写" v-model="taskName"></el-input>
-                    <div class="field-help">M3U8 通常不包含视频标题；无法提取时会使用时间戳。</div>
+                    <el-input type="text" placeholder="可选；未填写时使用时间戳" v-model="taskName"></el-input>
                   </el-form-item>
                   <el-form-item label="URL前缀" label-position="right" v-if="m3u8_url.startsWith('file:///')">
                     <el-tooltip effect="light" placement="top-start">

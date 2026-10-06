@@ -118,19 +118,50 @@ test('clearing tasks removes every task directory and completed video', () => {
   }
 });
 
-test('deleting one of two tasks with a shared directory keeps the files and record', () => {
+test('deleting one of two tasks with a shared directory keeps files until the last task is deleted', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm3u8-shared-test-'));
   const dir = path.join(root, 'shared');
+  const output = path.join(root, 'shared.mp4');
   fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, '000001.ts'), 'segment');
+  fs.writeFileSync(output, 'video');
   try {
-    const context = { fs, path };
+    const handlers = {};
+    const context = {
+      fs, path,
+      ipcMain: { on: (name, handler) => { handlers[name] = handler; } },
+      configVideos: [{ id: 1, taskName: 'shared', dir }, { id: 2, taskName: 'shared', dir }],
+      cancelTask() {}, logger: { info() {}, error: error => { throw error; } },
+      globalConfigVideoPath: path.join(root, 'videos.json')
+    };
     vm.createContext(context);
     const start = source.indexOf('function removeTaskDownloads(');
-    const end = source.indexOf("\nipcMain.on('delvideo'", start);
-    vm.runInContext(`${source.slice(start, end)}\nthis.removeTaskDownloads = removeTaskDownloads;`, context);
-    assert.throws(() => context.removeTaskDownloads({ id: 1, taskName: 'shared', dir }, [{ id: 2, dir }]));
+    const end = source.indexOf('\nfunction showDirInExploer(', start);
+    vm.runInContext(source.slice(start, end), context);
+    handlers.delvideo({ sender: { send() {} } }, 1);
+    assert.equal(context.configVideos.length, 1);
     assert.equal(fs.readFileSync(path.join(dir, '000001.ts'), 'utf8'), 'segment');
+    assert.equal(fs.readFileSync(output, 'utf8'), 'video');
+    handlers.delvideo({ sender: { send() {} } }, 2);
+    assert.equal(context.configVideos.length, 0);
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(fs.existsSync(output), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('new tasks with the same manual name get separate output directories', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm3u8-names-test-'));
+  try {
+    const context = { fs, path, configVideos: [], reservedDownloadDirs: new Set() };
+    vm.createContext(context);
+    const start = source.indexOf('function taskFileName(');
+    const end = source.indexOf('\nfunction playlistFailureMessage(', start);
+    vm.runInContext(`${source.slice(start, end)}\nthis.uniqueTaskName = uniqueTaskName;`, context);
+    assert.equal(context.uniqueTaskName('My Movie', 1, root), 'My Movie');
+    assert.equal(context.uniqueTaskName('My Movie', 2, root), 'My Movie-2');
+    assert.equal(context.uniqueTaskName('', 3, root), '3');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
